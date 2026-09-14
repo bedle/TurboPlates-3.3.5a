@@ -57,7 +57,7 @@ Settings are organized into tabs:
 - **Castbars** — Castbar appearance and highlight spells
 - **Debuffs/Buffs** — Aura filtering and display
 - **Personal Bar** — Your own nameplate settings
-- **Combo Points** — Style and colors
+- **Resources** — Combo Points / DK Runes Style and colors
 - **TurboDebuffs** — Priority debuff tracking
 - **Plate Stacking** — Overlap prevention settings
 - **Profiles** — Import/export configuration
