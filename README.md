@@ -31,6 +31,10 @@ See [`BACKPORT_NOTES.md`](BACKPORT_NOTES.md) for the technical details.
 - Added automatic disabling for nameplate coloring by class for classless servers
 - Completely reworked backend to be more light and in line with core/clean WotLK 3.3.5a API and cVars
 - Completely reworked extremely aggressive supression of Blizzard's GlobalFont calls which supressed text on custom UI elements
+- Reworded nameplate positioning system to match Blizzard's
+- Added Sliders for nameplate X/Y offset
+- Added Automatic scaling of nameplates using Blizzard engine
+- Added distance calculation engine which calculates distance between player - target and positions nameplate based on distance 
 
 ## Installation
 
