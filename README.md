@@ -76,7 +76,8 @@ Settings are organized into tabs:
 TurboPlates is released under the [MIT License](LICENSE).
 
 - Original **TurboPlates** by Miko ([esurm](https://github.com/esurm)) — © 2026.
-- **3.3.5a stock + awesome_wotlk backport** by Jedborg rework and rewrite by Vupp
+- **3.3.5a stock + awesome_wotlk backport** by Jedborg 
+- Rework and new features by Vupp
 
 The MIT license requires the original copyright notice to be kept; it is
 retained in [`LICENSE`](LICENSE) alongside the backport copyright.
