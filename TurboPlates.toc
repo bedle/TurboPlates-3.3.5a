@@ -1,0 +1,41 @@
+## Interface: 30300
+## Title: |cff4fa3ffT|cff5fb6f7u|cff6fcaefr|cff7fdee7b|cff8ff2d8o|cff9ff6b0P|cfffff68fl|cffffd36da|cffffb24at|cffff9138e|cffff3300s|r
+## Notes: Go faster with world's most lightweight nameplates! (Backported to 3.3.5a by Jedborg)
+## Author: Vupp (3.3.5a rework and new features) Jedborg (3.3.5a backport) — original TurboPlates by Miko (esurm)
+## Version: 1.4.6
+## SavedVariables: TurboPlatesDB
+
+# --- stock 3.3.5a compatibility shims (MUST load before everything) ---
+# Order matters: pure-API shims first (EventRegistry/C_Timer/etc.), then the
+# name-based nameplate engine, then the unit/aura API mappings.
+WotlkCompat_API.lua
+WotlkCompat_Channels.lua
+WotlkCompat.lua
+WotlkCompat_Auras.lua
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
+Libs\LibDeflate\LibDeflate.lua
+Libs\AceSerializer-3.0\AceSerializer-3.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+
+Config.lua
+Locales\enUS.lua
+Locales\zhCN.lua
+Locales\frFR.lua
+Locales\esES.lua
+Locales\deDE.lua
+SharedMedia.lua
+ImportExport.lua
+TurboDebuffs.lua
+Core.lua
+Auras.lua
+HealerDetection.lua
+Nameplates.lua
+Runes.lua
+ThreatAggro.lua
+Stacking.lua
+Castbars.lua
+OptionsGUI.lua
+MinimapButton.lua
