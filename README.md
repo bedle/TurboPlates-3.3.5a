@@ -67,6 +67,7 @@ TurboPlates is released under the [MIT License](LICENSE).
 
 - Original **TurboPlates** by Miko ([esurm](https://github.com/esurm)) — © 2026.
 - **3.3.5a stock + awesome_wotlk backport** by Jedborg
+- **3.3.5a stock + awesome_wotlk rework** by ([Vupp](https://github.com/bedle )) — © 2026.
 
 The MIT license requires the original copyright notice to be kept; it is
 retained in [`LICENSE`](LICENSE) alongside the backport copyright.
@@ -75,7 +76,7 @@ retained in [`LICENSE`](LICENSE) alongside the backport copyright.
 
 This is an unofficial, independent fork maintained separately for the stock
 3.3.5a client. It is **not affiliated with, endorsed by, sponsored by, or
-supported by** the original TurboPlates author or the Ascension project. Please
+supported by** the original TurboPlates author or the project. Please
 do **not** direct support requests for this backport to the original developer —
 [open an issue here](../../issues) instead. All trademarks and original work
 belong to their respective owners.
