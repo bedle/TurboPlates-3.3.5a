@@ -76,6 +76,7 @@ local _UnitIsDead        = UnitIsDead
 local _UnitIsDeadOrGhost = UnitIsDeadOrGhost
 local _UnitClassification= UnitClassification
 local _UnitIsTapped      = UnitIsTapped
+local _UnitIsTappedByPlayer = UnitIsTappedByPlayer
 local _UnitAffectingCombat = UnitAffectingCombat
 local _GetRaidTargetIndex = GetRaidTargetIndex
 
@@ -112,13 +113,6 @@ local function BindUnitOriginals()
 end
 BindUnitOriginals()
 
--- Stock 3.3.5a exposes no per-nameplate unit token.  Our fallback therefore
--- reads the ORIGINAL Blizzard health-bar colour as one of its reaction signals.
--- If Blizzard class-coloured nameplates are enabled, every classless HERO plate
--- can have the same class colour and that destroys the friendly/hostile signal.
--- TurboPlates applies class colours itself after it has classified the unit, so
--- keep the hidden Blizzard source bar on reaction colours.  pcall keeps this a
--- no-op on cores that do not expose this CVar.
 local function DisableNativeNameplateClassColor()
     if not HAVE_NATIVE_ENGINE and not HAVE_AWESOME_WOTLK and type(SetCVar) == "function" then
         pcall(SetCVar, "ShowClassColorInNameplate", "0")
@@ -134,30 +128,15 @@ _origBinder:SetScript("OnEvent", function()
     DisableNativeNameplateClassColor()
 end)
 
--- Keep the original Blizzard health StatusBar alive as a hidden reaction sensor.
--- TidyPlates 6.5.0 (3.3.5 backport) does the same important thing: it never
--- removes/reparents the source health StatusBar; it replaces only its visible
--- texture with a fully transparent texture and keeps reading GetStatusBarColor().
--- This matters on pooled 3.3.5 nameplates because removing the StatusBar texture
--- can freeze the C-side colour at the previous occupant's value.
 local NAMEPLATE_COLORS = {
     hostile        = {1,   0,   0},
     neutral        = {1,   1,   0},
     friendly       = {0,   1,   0},
-    -- Stock Wrath uses pure blue for a friendly player. Some private clients
-    -- expose the later cyan-blue form, which is accepted below as well.
-    friendlyPlayer = {0,   0,   1},
+    friendlyPlayer = {0,   0.6, 1},
     tapped         = {0.5, 0.5, 0.5},
 }
 local function ColorToReactionKey(r, g, b)
     if not r then return nil end
-
-    -- Canonical 3.3.5 reaction colours (same classification model used by the
-    -- supplied TidyPlates backport). Check player-blue before the fuzzy table.
-    if r <= 0.10 and g <= 0.10 and b >= 0.90 then return "friendlyPlayer" end
-    if r <= 0.10 and g >= 0.90 and b <= 0.10 then return "friendly" end
-    if r >= 0.90 and g >= 0.90 and b <= 0.10 then return "neutral" end
-    if r >= 0.90 and g <= 0.10 and b <= 0.10 then return "hostile" end
 
     for key, c in pairs(NAMEPLATE_COLORS) do
         if abs(c[1]-r) <= 0.1 and abs(c[2]-g) <= 0.1 and abs(c[3]-b) <= 0.1 then
@@ -165,20 +144,15 @@ local function ColorToReactionKey(r, g, b)
         end
     end
 
-    -- Compatibility with private 3.3.5 clients that use cyan-blue rather than
-    -- stock pure blue for friendly players. Keep this range deliberately narrow.
-    if r <= 0.15 and g >= 0.35 and g <= 0.85 and b >= 0.85 then
+    if abs(r) <= 0.15 and abs(g-0.6) <= 0.25 and abs(b-1) <= 0.15 then
+        return "friendlyPlayer"
+    end
+    if r <= 0.15 and g <= 0.15 and b >= 0.85 then
         return "friendlyPlayer"
     end
     return nil
 end
 
--- Private classless 3.3.5 clients are not consistent about which UnitClass
--- return contains the custom class. Some return ("Hero", "HERO"), while others
--- can expose Hero only in the localized/name return. Treat EITHER return as the
--- signal, case-insensitively. This is evaluated at runtime; do not cache the
--- player's class during addon file load because some 3.3.5 cores populate it
--- only after PLAYER_LOGIN / PLAYER_ENTERING_WORLD.
 local function IsHeroClassValue(value)
     return type(value) == "string" and strlower(value) == "hero"
 end
@@ -209,9 +183,6 @@ function ns.GetClassColor(classToken)
     local raidColors = _G.RAID_CLASS_COLORS
     local color = raidColors and raidColors[token]
     if color then return color end
-    -- Some private clients expose their custom class table through
-    -- CUSTOM_CLASS_COLORS.  This remains a client-provided colour; no HERO RGB
-    -- is hardcoded in TurboPlates.
     local customColors = _G.CUSTOM_CLASS_COLORS
     return customColors and customColors[token] or nil
 end
@@ -219,7 +190,7 @@ end
 local classCache          = {}
 local classTokenCache     = {}
 local isPlayerCache       = {}
-local playerRelationCache = {} -- name -> "friendly" / "enemy"
+local playerRelationCache = {}
 local levelCache          = {}
 ns.npClassCache          = classCache
 ns.npClassTokenCache     = classTokenCache
@@ -227,9 +198,6 @@ ns.npPlayerRelationCache = playerRelationCache
 
 local function RelationFromRealUnit(unit)
     if not unit or not _UnitExists(unit) then return nil end
-    -- UnitCanAttack catches normal hostile PvP; UnitIsFriend catches friendly
-    -- players.  UnitReaction handles sanctuary/other states where neither bool
-    -- alone gives a useful answer.
     if _UnitCanAttack("player", unit) then return "enemy" end
     if _UnitIsFriend("player", unit) then return "friendly" end
     local reaction = _UnitReaction(unit, "player") or _UnitReaction("player", unit)
@@ -346,18 +314,12 @@ if not HAVE_NATIVE_ENGINE then
             blizzFrame._tpHP, blizzFrame._tpHPMax = cur, max
             local r, g, b = healthBar:GetStatusBarColor()
             blizzFrame._tpReaction = ColorToReactionKey(r, g, b)
-            -- First-time capture often happens while the bar is already shown, so
-            -- treat that sample as current. On pooled reuse OnHide/OnShow below
-            -- explicitly resets/re-arms freshness for the new occupant.
             if healthBar.IsShown then
                 blizzFrame._tpReactionSourceReady = healthBar:IsShown() and true or false
             else
                 blizzFrame._tpReactionSourceReady = true
             end
 
-            -- Mirror TidyPlates' lifecycle: the source health StatusBar itself is
-            -- the reliable pooled-nameplate show/hide signal. Do not infer a new
-            -- occupant from a stale cached colour before this bar has shown again.
             if healthBar.HookScript then
                 healthBar:HookScript("OnHide", function()
                     blizzFrame._tpReactionSourceReady = false
@@ -377,8 +339,6 @@ if not HAVE_NATIVE_ENGINE then
 
             -- The engine updates the nameplate health bar C-side, which fires the
             -- OnValueChanged *script* (not the Lua SetValue method). Hook the
-            -- script so our cache tracks live values from the still-parented source
-            -- bar. We chain any pre-existing handler.
             local prevOVC = healthBar:GetScript("OnValueChanged")
             healthBar:SetScript("OnValueChanged", function(bar, value, ...)
                 local _, mx = bar:GetMinMaxValues()
@@ -463,8 +423,28 @@ if not HAVE_NATIVE_ENGINE then
         blizzFrame._tpNameText  = nameText
         blizzFrame._tpLevelText = levelText
         blizzFrame._tpRaidIcon  = regions[10]
+        local nativeHighlight = regions[6]
+        if nativeHighlight and nativeHighlight.GetObjectType and nativeHighlight:GetObjectType() == "Texture" then
+            blizzFrame._tpNativeHighlight = nativeHighlight
+        end
+        local bossIcon = regions[9]
+        if bossIcon and bossIcon.GetObjectType and bossIcon:GetObjectType() == "Texture" then
+            blizzFrame._tpBossIcon = bossIcon
+        end
+        local eliteIcon = regions[11]
+        if eliteIcon and eliteIcon.GetObjectType and eliteIcon:GetObjectType() == "Texture" then
+            blizzFrame._tpEliteIcon = eliteIcon
+        end
+        local threat = regions[1]
+        if threat and threat.GetObjectType and threat:GetObjectType() == "Texture" then
+            blizzFrame._tpThreat = threat
+        end
         blizzFrame._tpHealthBar = healthBar
         blizzFrame._tpCastBar   = castBar
+        local castShield = regions[4]
+        if castShield and castShield.GetObjectType and castShield:GetObjectType() == "Texture" then
+            blizzFrame._tpCastShield = castShield
+        end
         -- Spell icon for the cast bar (region 5 in the canonical WotLK order, same
         -- fixed-index approach as the raid icon above). Used to show WHICH spell an
         -- untargeted mob is casting (NotPlater does the same). A wrong index from a
@@ -512,20 +492,15 @@ if not HAVE_NATIVE_ENGINE then
     end
     local function PlateReaction(blizzFrame)
         if not blizzFrame then return nil end
-        -- A real-token/combat-log observation is more trustworthy than the
-        -- scraped Blizzard bar.  This is especially important on classless
-        -- servers where an external CVar/client patch may temporarily paint a
-        -- friendly HERO plate with the HERO class colour.
-        local name = PlateName(blizzFrame)
-        if name and isPlayerCache[name] == true then
-            local relation = playerRelationCache[name]
-            if relation == "friendly" then return "friendlyPlayer" end
-            if relation == "enemy" then return "hostile" end
-        end
-        if blizzFrame._tpReaction ~= nil then return blizzFrame._tpReaction end
         local hb = blizzFrame._tpHealthBar
-        if not hb or not hb.GetStatusBarColor then return nil end
-        return ColorToReactionKey(hb:GetStatusBarColor())
+        if hb and hb.GetStatusBarColor and blizzFrame._tpReactionSourceReady ~= false then
+            local rk = ColorToReactionKey(hb:GetStatusBarColor())
+            if rk then
+                blizzFrame._tpReaction = rk
+                return rk
+            end
+        end
+        return blizzFrame._tpReaction
     end
 
     local trackedUnits = {}
@@ -534,6 +509,7 @@ if not HAVE_NATIVE_ENGINE then
         trackedUnits[#trackedUnits+1] = "target"
         trackedUnits[#trackedUnits+1] = "focus"
         trackedUnits[#trackedUnits+1] = "mouseover"
+        for i = 1, 5 do trackedUnits[#trackedUnits+1] = "arena"..i end
         -- Cache each group member's class/level while we're here (roster events
         -- only, not a hot path): their lite plates class-colour the name without
         -- needing a target/mouseover to fill the name-keyed cache first.
@@ -691,9 +667,6 @@ if not HAVE_NATIVE_ENGINE then
                     frame._tpReaction = key
                 end
             end
-            -- Never Hide(), alpha-zero, remove, or reparent the source StatusBar.
-            -- ReactionSensor.tga is fully transparent, so it remains visually empty
-            -- while the client continues updating its value and vertex colour C-side.
         end
     end
 
@@ -720,9 +693,6 @@ if not HAVE_NATIVE_ENGINE then
     local REACTION_WAIT_TICKS = 5
     local function PlateAnnounceReady(blizzFrame)
         if not PlateDataReady(blizzFrame) then return false end
-        -- A pooled frame can become shown before its health StatusBar has completed
-        -- the new occupant's OnShow/update. Never announce from the previous
-        -- occupant's cached colour; wait for the source bar lifecycle first.
         if blizzFrame._tpReactionSourceReady == false then return false end
         if PlateReaction(blizzFrame) ~= nil then return true end
         blizzFrame._tpReactionWait = (blizzFrame._tpReactionWait or 0) + 1
@@ -940,15 +910,25 @@ if not HAVE_NATIVE_ENGINE then
         return type(unit) == "string" and tokenToPlate[unit] ~= nil
     end
 
-    -- Read the still-live Blizzard source colour for visual pass-through. Only the
-    -- stock compatibility path uses this; native clients continue using their own
-    -- nameplate unit tokens.
-    function ns.GetNameplateSourceColor(unit)
+    function ns.GetNativePlateReaction(unit)
+        if not isPlateToken(unit) then return nil end
+        return PlateReaction(tokenToPlate[unit])
+    end
+
+    function ns.GetNativePlateThreatStatus(unit)
         if not isPlateToken(unit) then return nil end
         local frame = tokenToPlate[unit]
-        local bar = frame and frame._tpHealthBar
-        if bar and bar.GetStatusBarColor then
-            return bar:GetStatusBarColor()
+        if not frame then return nil end
+        local threat = frame._tpThreat
+        if threat and threat.IsShown and threat:IsShown() then
+            local r, g, b = threat:GetVertexColor()
+            if r and r > 0 then
+                if g and g > 0 then
+                    if b and b > 0 then return 1 end
+                    return 2
+                end
+                return 3
+            end
         end
         return nil
     end
@@ -1090,9 +1070,6 @@ if not HAVE_NATIVE_ENGINE then
     function ns.UnitIsPlayer(unit, ...)
         if isPlateToken(unit) then
             local f = tokenToPlate[unit]
-            -- Stock 3.3.5 gives us an immediate per-plate distinction for friendly
-            -- units: native BLUE means player, native GREEN means NPC. This must beat
-            -- the name cache (which is necessarily late and can collide on names).
             local rk = PlateReaction(f)
             if rk == "friendlyPlayer" then return true end
             if rk == "friendly" then return false end
@@ -1268,8 +1245,22 @@ if not HAVE_NATIVE_ENGINE then
 
     function ns.UnitClassification(unit, ...)
         if isPlateToken(unit) then
-            local _, real = ResolveToken(unit)
+            local f, real = ResolveToken(unit)
             if real then return _UnitClassification(real) end
+            if f then
+                local boss = f._tpBossIcon
+                if boss and boss.IsShown and boss:IsShown() then
+                    return "worldboss"
+                end
+                local state = f._tpEliteIcon
+                if state and state.IsShown and state:IsShown() then
+                    local texture = state.GetTexture and state:GetTexture()
+                    if texture == "Interface\\Tooltips\\EliteNameplateIcon" then
+                        return "elite"
+                    end
+                    return "rare"
+                end
+            end
             return "normal"
         end
         return _UnitClassification(unit, ...)
@@ -1310,7 +1301,6 @@ if not HAVE_NATIVE_ENGINE then
         end
     end
 
-    local _UnitIsTappedByPlayer = UnitIsTappedByPlayer
     if _UnitIsTappedByPlayer then
         function ns.UnitIsTappedByPlayer(unit, ...)
             if isPlateToken(unit) then
@@ -1475,11 +1465,6 @@ if not HAVE_NATIVE_ENGINE then
     -- WorldFrame plate stops those updates on this client (and alpha-0 alone is
     -- undone when the engine re-shows the region), so for those two we keep them
     -- parented and force them hidden via Hide() + a Show hook - the text keeps
-    -- updating in place, our SetText hook keeps the cache live. Borders/icons are
-    -- reparented + hidden. The health StatusBar is the exception:
-    -- it stays parented and logically shown with a fully transparent texture, the
-    -- same proven 3.3.5 pattern used by the supplied TidyPlates backport. This keeps
-    -- the engine's health value and reaction colour updates live across pool reuse.
     --
     -- Runs at AcquirePlate (before TurboPlates ever sees the plate) and sets the
     -- `_turboBlizzHidden` flag TurboPlates checks, so TP's own HideBlizzardElements
@@ -1519,12 +1504,6 @@ if not HAVE_NATIVE_ENGINE then
                     -- and reliably hidden.
                     SuppressRegion(child)
                 elseif child == healthBar then
-                    -- TidyPlates-style reaction sensor: keep Blizzard's ORIGINAL
-                    -- StatusBar parented and logically shown so the 3.3.5 engine keeps
-                    -- updating GetStatusBarColor() for every pooled occupant. Replace
-                    -- only its artwork with a fully transparent texture. The previous
-                    -- Hide()/alpha-zero/texture-drop cycle could freeze a stale green
-                    -- or red value until target/mouseover forced a real-unit refresh.
                     if child.SetStatusBarTexture then
                         child:SetStatusBarTexture("Interface\\AddOns\\TurboPlates\\Textures\\ReactionSensor.tga")
                     end
@@ -1552,6 +1531,17 @@ if not HAVE_NATIVE_ENGINE then
                             if cr.Hide then cr:Hide() end
                         end
                     end
+                elseif child == blizzFrame._tpNativeHighlight then
+                    child:SetAlpha(0)
+                elseif child == blizzFrame._tpCastShield then
+                    child:SetAlpha(0)
+                elseif child == blizzFrame._tpRaidIcon then
+                    child:SetAlpha(0)
+                elseif child == blizzFrame._tpBossIcon or child == blizzFrame._tpEliteIcon then
+                    child:SetAlpha(0)
+                elseif child == blizzFrame._tpThreat then
+                    if child.SetTexture then child:SetTexture("") end
+                    child:Hide()
                 elseif child == blizzFrame._tpSpellIcon then
                     -- Keep the spell icon PARENTED (do NOT reparent/clear) so the
                     -- engine keeps writing the casting spell's texture into it in
@@ -1642,9 +1632,6 @@ if not HAVE_NATIVE_ENGINE then
                 end
             end)
         end
-        -- No reaction-texture rearm is needed. The transparent sensor texture stays
-        -- installed for the lifetime of this pooled Blizzard StatusBar, matching the
-        -- stable 3.3.5 strategy used by TidyPlates.
 
         CapturePlateRefs(blizzFrame)
         HideBlizzPlateRegions(blizzFrame)
@@ -1687,9 +1674,6 @@ if not HAVE_NATIVE_ENGINE then
             FireRemoved(token, blizzFrame)
             blizzFrame._tpAnnounced = false
         end
-        -- TidyPlates-style source lifecycle: never let a pooled frame carry the
-        -- previous occupant's reaction across a hide/show. The transparent source
-        -- bar remains alive, and its next OnShow supplies the fresh colour.
         blizzFrame._tpReaction = nil
         blizzFrame._tpReactionSourceReady = false
         blizzFrame._tpReactionWait = nil
@@ -1952,17 +1936,29 @@ if not HAVE_NATIVE_ENGINE then
                 -- channeling branch (CastbarOnUpdate decrements for channels).
                 if info.channel then fill = 1 - fill end
                 if fill < 0 then fill = 0 elseif fill > 1 then fill = 1 end
+                local shield = frame._tpCastShield
+                local notInterruptible = shield and shield.IsShown and shield:IsShown() and true or false
                 if not frame._tpScraping then
                     frame._tpScraping = true
-                    ns:ScrapeCastStart(token, false, icon, info.name)
+                    ns:ScrapeCastStart(token, notInterruptible, icon, info.name)
                 end
-                ns:ScrapeCastUpdate(token, fill, false, icon, info.name)
+                ns:ScrapeCastUpdate(token, fill, notInterruptible, icon, info.name)
             elseif frame._tpScraping then
                 -- Cast ended, plate hidden/recycled, or it gained a real unit (event
                 -- path takes over) - tear our mirror down. ScrapeCastStop no-ops if
                 -- the event path has already claimed the castbar.
                 frame._tpScraping = nil
                 if token then ns:ScrapeCastStop(token) end
+            end
+        end
+    end
+
+    function ns:RefreshNativeMouseoverPresentation()
+        if not ns.UpdateNativeMouseoverPresentation then return end
+        for frame in pairs(managedPlates) do
+            if frame:IsShown() and frame._tpAnnounced then
+                local h = frame._tpNativeHighlight
+                ns.UpdateNativeMouseoverPresentation(frame, h and h.IsShown and h:IsShown() and true or false)
             end
         end
     end
@@ -1984,6 +1980,14 @@ if not HAVE_NATIVE_ENGINE then
         ProcessPlateVisibility()
         -- Every frame: mirror engine-driven casts for untargeted mobs.
         ProcessPlateCasts()
+        if ns.UpdateNativeMouseoverPresentation then
+            for frame in pairs(managedPlates) do
+                if frame:IsShown() and frame._tpAnnounced then
+                    local h = frame._tpNativeHighlight
+                    ns.UpdateNativeMouseoverPresentation(frame, h and h.IsShown and h:IsShown() and true or false)
+                end
+            end
+        end
         matchElapsed = matchElapsed + elapsed
         if matchElapsed >= 0.1 * (ns.c_throttleMultiplier or 1) then
             matchElapsed = 0
@@ -2010,11 +2014,6 @@ if not HAVE_NATIVE_ENGINE then
                             FireAdded(frame._tpToken, frame)
                         end
                     else
-                        -- Reclassify when friendliness changes, and also recolour when
-                        -- the native subtype changes within the friendly family
-                        -- (green NPC <-> blue player). Without the subtype check a
-                        -- plate could stay green until mouseover even after the live
-                        -- Blizzard source had already corrected to blue.
                         local fr = PlateIsFriendly(frame)
                         local rk = PlateReaction(frame)
                         if fr ~= frame._tpAnnouncedFriendly then
@@ -2027,6 +2026,15 @@ if not HAVE_NATIVE_ENGINE then
                             if frame._isLite and frame.liteContainer and ns.UpdateLiteHealthBar then
                                 ns:UpdateLiteHealthBar(frame.liteContainer, frame._tpToken)
                             end
+                        end
+                        if ns.c_tankMode and ns.c_tankMode ~= 0 and ns.GetNativePlateThreatStatus then
+                            local ts = ns.GetNativePlateThreatStatus(frame._tpToken)
+                            if ts ~= frame._tpLastThreatStatus then
+                                frame._tpLastThreatStatus = ts
+                                if ns.UpdateColor then ns.UpdateColor(frame._tpToken) end
+                            end
+                        else
+                            frame._tpLastThreatStatus = nil
                         end
                     end
                 end
@@ -2131,12 +2139,9 @@ if not HAVE_NATIVE_ENGINE then
             if frame._tpAnnounced and PlateName(frame) == name then
                 local friendly = PlateIsFriendly(frame)
                 if friendly ~= frame._tpAnnouncedFriendly then
-                    -- Switching friendly/full mode needs the full add path again.
                     frame._tpAnnouncedFriendly = friendly
                     FireAdded(frame._tpToken, frame)
                 elseif ns.UpdateColor then
-                    -- Hostile->hostile does not reclassify the plate, but it may
-                    -- have just changed from "unknown NPC" to known player.
                     ns.UpdateColor(frame._tpToken)
                 end
             end
@@ -2339,7 +2344,61 @@ if not HAVE_NATIVE_ENGINE then
             local f = tokenToPlate[unit]
             return (f and f:IsShown() and f._tpAnnounced) and f or nil
         end
+        --
+        if _UnitExists(unit) then
+            --
+            local aliasFrame
+            if not matchUnitToPlate[unit] then
+                for ownedFrame in pairs(managedPlates) do
+                    local ownedUnit = ownedFrame._tpMatchedUnit
+                    if ownedUnit and ownedUnit ~= unit and _UnitExists(ownedUnit)
+                       and UnitIsUnit and UnitIsUnit(ownedUnit, unit) then
+                        if unit == "target" then
+                            SetMatch(ownedFrame, unit)
+                        else
+                            aliasFrame = ownedFrame
+                        end
+                        break
+                    end
+                end
+            end
+            if aliasFrame and aliasFrame:IsShown() and aliasFrame._tpAnnounced
+               and PlateStillMatchesUnit(aliasFrame, unit) then
+                return aliasFrame
+            end
+            if UpdateMatches then UpdateMatches() end
+        end
         local f = matchUnitToPlate[unit]
+
+        if not f and unit == "target" and _UnitExists("target") then
+            local targetName = _UnitName("target")
+            local targetLevel = _UnitLevel("target")
+            local alphaFrame, alphaAmbiguous, sawDimmed = nil, false, false
+
+            for frame in pairs(managedPlates) do
+                if frame:IsShown() and frame._tpAnnounced and frame.GetAlpha then
+                    local a = frame:GetAlpha() or 1
+                    if a < 0.99 then sawDimmed = true end
+
+                    if a >= 0.99 and PlateName(frame) == targetName then
+                        local lvl = PlateLevel(frame)
+                        if not (lvl and targetLevel and targetLevel > 0 and lvl ~= targetLevel) then
+                            if alphaFrame then
+                                alphaAmbiguous = true
+                            else
+                                alphaFrame = frame
+                            end
+                        end
+                    end
+                end
+            end
+
+            if sawDimmed and alphaFrame and not alphaAmbiguous then
+                SetMatch(alphaFrame, "target")
+                f = matchUnitToPlate[unit]
+            end
+        end
+
         -- Trust an already-established match via the lenient check; the strict
         -- health compare here would intermittently return nil for the target on
         -- the post-hit sync gap (see PlateStillMatchesUnit) and flicker the glow.
@@ -2455,11 +2514,11 @@ if not HAVE_NATIVE_ENGINE then
             if name and name ~= "" and name ~= "Unknown" then
                 blizzFrame._tpName = name
             end
-            -- Pre-fill reaction from native API, bypassing color-stabilisation.
-            local friend = _UnitIsFriend("player", unit)
-            local canAtk = _UnitCanAttack("player", unit)
-            blizzFrame._tpReaction = friend and "friendly" or (canAtk and "hostile" or "neutral")
-            blizzFrame._tpReactionStable = 99  -- skip the 2-read stability gate
+            local hb = blizzFrame._tpHealthBar
+            if hb and hb.GetStatusBarColor then
+                local rk = ColorToReactionKey(hb:GetStatusBarColor())
+                if rk then blizzFrame._tpReaction = rk end
+            end
             -- Announce immediately if ready.
             if PlateAnnounceReady(blizzFrame) then
                 blizzFrame._tpAnnounced = true

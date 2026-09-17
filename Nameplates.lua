@@ -55,36 +55,64 @@ local strsub = string.sub
 local strmatch = string.match
 local gmatch = string.gmatch
 local gsub = string.gsub
-local utf8sub = string.utf8sub or strsub
-local utf8lower = string.utf8lower or string.lower
 
 -- Name formatting functions
+local function SplitNameWords(name)
+    local normalized = name
+        :gsub("\194\160", " ")
+        :gsub("\226\128\175", " ")
+        :gsub("\226\128\135", " ")
+        :gsub("\227\128\128", " ")
+
+    local words = {}
+    for word in gmatch(normalized, "%S+") do
+        words[#words + 1] = word
+    end
+    return words
+end
+
+local function FirstUTF8Character(text)
+    if not text or text == "" then return "" end
+    if string.utf8sub then return string.utf8sub(text, 1, 1) end
+
+    local b = text:byte(1)
+    local bytes = 1
+    if b and b >= 240 then
+        bytes = 4
+    elseif b and b >= 224 then
+        bytes = 3
+    elseif b and b >= 192 then
+        bytes = 2
+    end
+    return strsub(text, 1, bytes)
+end
+
 -- Abbreviate: "Shadowfury Witch Doctor" -> "S. W. Doctor"
 local function AbbreviateName(name)
-    local letters, lastWord = '', strmatch(name, '.+%s(.+)$')
-    if lastWord then
-        for word in gmatch(name, '.-%s') do
-            local firstLetter = utf8sub(gsub(word, '^[%s%p]*', ''), 1, 1)
-            if firstLetter ~= utf8lower(firstLetter) then
-                letters = format('%s%s. ', letters, firstLetter)
-            end
-        end
-        name = format('%s%s', letters, lastWord)
+    local words = SplitNameWords(name)
+    if #words <= 1 then return name end
+
+    local abbreviated = {}
+    for i = 1, #words - 1 do
+        local first = FirstUTF8Character(words[i])
+        if first ~= "" then abbreviated[#abbreviated + 1] = first .. "." end
     end
-    return name
+    abbreviated[#abbreviated + 1] = words[#words]
+    return table.concat(abbreviated, " ")
 end
 
 -- Get first word: "Shadowfury Witch Doctor" -> "Shadowfury"
 local function FirstName(name)
-    return strmatch(name, '^(%S+)') or name
+    local words = SplitNameWords(name)
+    return words[1] or name
 end
 
 -- Get last word: "Shadowfury Witch Doctor" -> "Doctor"
 local function LastName(name)
-    return strmatch(name, '(%S+)$') or name
+    local words = SplitNameWords(name)
+    return words[#words] or name
 end
 
--- Format name based on setting
 function ns:FormatName(name)
     if not name or name == "" then return name end
     local fmt = ns.c_nameDisplayFormat or "none"
@@ -95,7 +123,7 @@ function ns:FormatName(name)
     elseif fmt == "last" then
         return LastName(name)
     end
-    return name  -- "none" - full name
+    return name
 end
 
 local C_NamePlate = C_NamePlate
@@ -260,6 +288,7 @@ function ns:UpdateDBCache()
     ns.c_width = db.width or 110
     ns.c_hpHeight = db.hpHeight or 12
     ns.c_castHeight = db.castHeight or 10
+    ns.c_castbarYOffset = db.castbarYOffset or 0
     -- Use LSM to fetch texture/font paths from names
     ns.c_texture = ns.GetTexture and ns.GetTexture(db.texture) or "Interface\\RaidFrame\\Raid-Bar-Hp-Fill"
     ns.c_backgroundAlpha = db.backgroundAlpha or 0.8
@@ -315,9 +344,6 @@ function ns:UpdateDBCache()
     -- Tank mode settings
     ns.c_tankMode = db.tankMode or 0
 
-    -- Class color settings. Evaluate HERO status dynamically and from BOTH
-    -- UnitClass returns through the compatibility helper; never cache the answer
-    -- at Lua file-load time.
     local classColorsUnavailable = ns.IsClasslessHeroPlayer and ns.IsClasslessHeroPlayer() or false
     if classColorsUnavailable and db ~= ns.defaults then
         db.classColoredHealth = false
@@ -333,6 +359,13 @@ function ns:UpdateDBCache()
     local hpc = db.hpColor or { r = 1, g = 0.2, b = 0.2 }
     ns.c_hpColor_r, ns.c_hpColor_g, ns.c_hpColor_b = hpc.r, hpc.g, hpc.b
 
+    local fpc = db.friendlyPlayerColor or { r = 0.31, g = 0.45, b = 0.63 }
+    ns.c_friendlyPlayerColor_r, ns.c_friendlyPlayerColor_g, ns.c_friendlyPlayerColor_b = fpc.r, fpc.g, fpc.b
+    local fnc = db.friendlyNPCColor or { r = 0.29, g = 0.68, b = 0.30 }
+    ns.c_friendlyNPCColor_r, ns.c_friendlyNPCColor_g, ns.c_friendlyNPCColor_b = fnc.r, fnc.g, fnc.b
+    local nc = db.neutralColor or { r = 0.85, g = 0.77, b = 0.36 }
+    ns.c_neutralColor_r, ns.c_neutralColor_g, ns.c_neutralColor_b = nc.r, nc.g, nc.b
+
     local pc = db.petColor or { r = 0.5, g = 0.5, b = 0.5 }
     ns.c_petColor_r, ns.c_petColor_g, ns.c_petColor_b = pc.r, pc.g, pc.b
 
@@ -340,7 +373,6 @@ function ns:UpdateDBCache()
     local tpc = db.tappedColor or { r = 0.5, g = 0.5, b = 0.5 }
     ns.c_tappedColor_r, ns.c_tappedColor_g, ns.c_tappedColor_b = tpc.r, tpc.g, tpc.b
 
-    -- Hostile/friendly name colors
     local hnc = db.hostileNameColor or { r = 1, g = 1, b = 1 }
     ns.c_hostileNameColor_r, ns.c_hostileNameColor_g, ns.c_hostileNameColor_b = hnc.r, hnc.g, hnc.b
     local fnc = db.friendlyNameColor or { r = 1, g = 1, b = 1 }
@@ -388,7 +420,6 @@ function ns:UpdateDBCache()
     ns.c_cpPersonalX = db.cpPersonalX or 0
     ns.c_cpPersonalY = db.cpPersonalY or 0
 
-    -- Death Knight rune settings (rendered by Runes.lua)
     ns.c_showRunes = db.showRunes == true
     ns.c_runesOnPersonalBar = db.runesOnPersonalBar == true
     ns.c_runeStyle = db.runeStyle or 1
@@ -433,6 +464,7 @@ function ns:UpdateDBCache()
     ns.c_targetArrow = db.targetArrow or "none"
     local tgc = db.targetGlowColor or { r = 1, g = 1, b = 1 }
     ns.c_targetGlowColor_r, ns.c_targetGlowColor_g, ns.c_targetGlowColor_b = tgc.r, tgc.g, tgc.b
+    ns.c_mouseoverGlow = db.mouseoverGlow ~= false
     local mgc = db.mouseoverGlowColor or { r = 1, g = 1, b = 1 }
     ns.c_mouseoverGlowColor_r, ns.c_mouseoverGlowColor_g, ns.c_mouseoverGlowColor_b = mgc.r, mgc.g, mgc.b
 
@@ -616,6 +648,7 @@ function ns:UpdateDBCache()
             myPlate._lastQuestY = nil
             -- Castbar caches
             myPlate._lastCastHeight = nil
+            myPlate._lastCastYOffset = nil
             myPlate._lastCastTexture = nil
             -- Combo point caches
             myPlate._lastCpX = nil
@@ -1099,6 +1132,7 @@ function ns.OnPlateBound(blizzFrame, realGUID)
         local a = ns.ResolveNameplateAlpha(plate, blizzFrame:GetAlpha(), "bind")
         if a ~= plate:GetAlpha() then plate:SetAlpha(a) end
     end
+    if blizzFrame._tpToken and ns.UpdateColor then ns.UpdateColor(blizzFrame._tpToken) end
     if blizzFrame._tpToken and ns.UpdateRaidIcon then ns.UpdateRaidIcon(blizzFrame._tpToken) end
     -- Binding gives us the real unit, so the quest tooltip scan can finally run here.
     -- This is what makes MOUSING OVER (or targeting) a quest mob learn it - the icon
@@ -1696,6 +1730,39 @@ local function ApplyMouseoverGlowColor(highlight)
     )
 end
 
+function ns.UpdateNativeMouseoverPresentation(blizzFrame, hovered)
+    if not blizzFrame then return end
+    if ns.c_mouseoverGlow == false then hovered = false end
+    local cameraLook = type(IsMouselooking) == "function" and IsMouselooking()
+    if cameraLook then hovered = false end
+    if blizzFrame._isLite then
+        if hovered then
+            if ns.ShowLiteNameHighlight then
+                ns.ShowLiteNameHighlight(blizzFrame, nil, blizzFrame._tpNativeHighlight)
+            end
+        elseif ns.HideLiteNameHighlight then
+            local c = blizzFrame.liteContainer
+            local d = c and c.liteNameHighlightDriver
+            if d and d.nativeSource then ns.HideLiteNameHighlight(c) end
+        end
+        return
+    end
+    local myPlate = blizzFrame.myPlate
+    local highlight = myPlate and myPlate.highlight
+    if not highlight or myPlate.isPlayer then return end
+    if hovered then
+        ApplyMouseoverGlowColor(highlight)
+        highlight.nativeSource = blizzFrame._tpNativeHighlight
+        highlight.elapsed = 0
+        highlight:Show()
+    elseif highlight.nativeSource then
+        highlight.nativeSource = nil
+        if cameraLook or not (highlight.unit and UnitExists("mouseover") and UnitIsUnit("mouseover", highlight.unit)) then
+            highlight:Hide()
+        end
+    end
+end
+
 local function EnsureFullPlate(myPlate)
     if myPlate.hp then return end  -- Already has health bar
 
@@ -1784,12 +1851,22 @@ local function EnsureFullPlate(myPlate)
 
     -- OnUpdate: hide when mouse leaves unit
     highlight:SetScript("OnUpdate", function(self, elapsed)
+        if ns.c_mouseoverGlow == false then
+            self.nativeSource = nil
+            self.unit = nil
+            self:Hide()
+            return
+        end
         self.elapsed = (self.elapsed or 0) + elapsed
         local throttle = 0.1 * (ns.c_throttleMultiplier or 1)
         if self.elapsed > throttle then
             self.elapsed = 0
             -- If mouse moved off this unit, hide
-            if not (self.unit and UnitExists("mouseover") and UnitIsUnit("mouseover", self.unit)) then
+            local cameraLook = type(IsMouselooking) == "function" and IsMouselooking()
+            local native = self.nativeSource
+            local nativeHover = not cameraLook and native and native.IsShown and native:IsShown()
+            if cameraLook or (not nativeHover and not (self.unit and UnitExists("mouseover") and UnitIsUnit("mouseover", self.unit))) then
+                self.nativeSource = nil
                 self:Hide()
             end
         end
@@ -1814,22 +1891,7 @@ local function EnsureFullPlate(myPlate)
     myPlate.totemIcon = totemIcon
 
     -- Create raid icon (only needed for full plates) - use cached values
-    local myRaidIcon = myPlate:CreateTexture(nil, "OVERLAY")
-    PixelUtil.SetSize(myRaidIcon, ns.c_raidMarkerSize, ns.c_raidMarkerSize, 1, 1)
-    -- Position based on anchor: LEFT/RIGHT outside healthbar, TOP above name
-    if ns.c_raidMarkerAnchor == "LEFT" then
-        PixelUtil.SetPoint(myRaidIcon, "RIGHT", hp, "LEFT", ns.c_raidMarkerX - 2, ns.c_raidMarkerY, 1, 1)
-    elseif ns.c_raidMarkerAnchor == "RIGHT" then
-        PixelUtil.SetPoint(myRaidIcon, "LEFT", hp, "RIGHT", ns.c_raidMarkerX + 2, ns.c_raidMarkerY, 1, 1)
-    elseif ns.c_raidMarkerAnchor == "TOP" then
-        PixelUtil.SetPoint(myRaidIcon, "BOTTOM", myPlate.nameText, "TOP", ns.c_raidMarkerX, ns.c_raidMarkerY + 2, 1, 1)
-    else
-        -- Fallback: treat as LEFT
-        PixelUtil.SetPoint(myRaidIcon, "RIGHT", hp, "LEFT", ns.c_raidMarkerX - 2, ns.c_raidMarkerY, 1, 1)
-    end
-    myRaidIcon:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
-    myRaidIcon:Hide()
-    myPlate.raidIcon = myRaidIcon
+
 
     -- Quest icon created on-demand by EnsureQuestIcon()
 
@@ -2479,7 +2541,7 @@ local function EnsureCastbar(myPlate)
             end
 
             if showIcon then
-                PixelUtil.SetPoint(myPlate.castbar, "TOPLEFT", myPlate.hp, "BOTTOMLEFT", iconSize + 2, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOPLEFT", myPlate.hp, "BOTTOMLEFT", iconSize + 2, -2 + (ns.c_castbarYOffset or 0), 1, 1)
                 -- Position and size icon
                 if myPlate.castbar.icon then
                     PixelUtil.SetSize(myPlate.castbar.icon, iconSize, iconSize, 1, 1)
@@ -2492,7 +2554,7 @@ local function EnsureCastbar(myPlate)
                     myPlate.castbar.iconBorder:SetAllPoints(myPlate.castbar.icon)
                 end
             else
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             end
         end
     end
@@ -2526,8 +2588,6 @@ function ns:ClearPersonalPlateRef()
     personalPlateRef = nil
 end
 
--- Expose the personal resource-bar plate to self-contained resource modules
--- (Runes.lua) without making the local reference writable outside this file.
 function ns:GetPersonalPlateRef()
     return personalPlateRef
 end
@@ -3034,9 +3094,6 @@ local function EnsureTargetingMeGlow(myPlate)
     myPlate.targetingMeGlow = glow
 end
 
--- Store original colors for restoration when targeting me ends
-local originalColors = {}  -- [myPlate] = {name={r,g,b}, border={r,g,b}}
-
 -- Forward declaration for UpdateColor (defined later)
 local UpdateColor
 
@@ -3049,22 +3106,16 @@ local function UpdateTargetingMeVisual(myPlate, isTargetingMe)
         -- Clean up any active indicators
         if myPlate.targetingMeGlow then myPlate.targetingMeGlow:Hide() end
         if myPlate._targetingMeActive then
-            -- Restore original colors (except health, which uses UpdateColor)
-            local orig = originalColors[myPlate]
-            if orig then
-                if orig.name and myPlate.nameText then
-                    myPlate.nameText:SetTextColor(orig.name.r, orig.name.g, orig.name.b)
-                end
-                if orig.border and myPlate.hp and myPlate.hp.border then
-                    myPlate.hp.border:SetColor(orig.border.r, orig.border.g, orig.border.b, orig.border.a)
-                end
-            end
-            -- Recalculate health bar color via UpdateColor
-            if myPlate.unit and UpdateColor then
-                UpdateColor(myPlate.unit)
+            if myPlate.unit and UpdateColor then UpdateColor(myPlate.unit) end
+            if myPlate.nameText and myPlate.unit then
+                local friendly = UnitIsFriend("player", myPlate.unit)
+                local _, class = UnitClass(myPlate.unit)
+                local cc = ns.c_classColoredName and class and ns.GetClassColor(class)
+                if cc then myPlate.nameText:SetTextColor(cc.r, cc.g, cc.b)
+                elseif friendly then myPlate.nameText:SetTextColor(ns.c_friendlyNameColor_r, ns.c_friendlyNameColor_g, ns.c_friendlyNameColor_b)
+                else myPlate.nameText:SetTextColor(ns.c_hostileNameColor_r, ns.c_hostileNameColor_g, ns.c_hostileNameColor_b) end
             end
             myPlate._targetingMeActive = nil
-            originalColors[myPlate] = nil
         end
         return
     end
@@ -3072,18 +3123,6 @@ local function UpdateTargetingMeVisual(myPlate, isTargetingMe)
     local r, g, b = ns.c_targetingMeColor_r, ns.c_targetingMeColor_g, ns.c_targetingMeColor_b
 
     if isTargetingMe then
-        -- Store original colors if not already stored
-        if not myPlate._targetingMeActive then
-            originalColors[myPlate] = {}
-            if myPlate.nameText then
-                local nr, ng, nb = myPlate.nameText:GetTextColor()
-                originalColors[myPlate].name = {r = nr, g = ng, b = nb}
-            end
-            if myPlate.hp and myPlate.hp.border then
-                local br, bg, bb, ba = myPlate.hp.border:GetColor()
-                originalColors[myPlate].border = {r = br, g = bg, b = bb, a = ba}
-            end
-        end
         myPlate._targetingMeActive = true
 
         if indicator == "glow" then
@@ -3113,17 +3152,16 @@ local function UpdateTargetingMeVisual(myPlate, isTargetingMe)
     else
         -- Not targeting me - restore defaults and hide indicators
         if myPlate._targetingMeActive then
-            local orig = originalColors[myPlate]
-            if orig then
-                if indicator == "name" and orig.name and myPlate.nameText then
-                    myPlate.nameText:SetTextColor(orig.name.r, orig.name.g, orig.name.b)
-                end
-                if indicator == "health" and myPlate.unit and UpdateColor then
-                    UpdateColor(myPlate.unit)
-                end
+            if indicator == "health" and myPlate.unit and UpdateColor then UpdateColor(myPlate.unit) end
+            if indicator == "name" and myPlate.nameText and myPlate.unit then
+                local friendly = UnitIsFriend("player", myPlate.unit)
+                local _, class = UnitClass(myPlate.unit)
+                local cc = ns.c_classColoredName and class and ns.GetClassColor(class)
+                if cc then myPlate.nameText:SetTextColor(cc.r, cc.g, cc.b)
+                elseif friendly then myPlate.nameText:SetTextColor(ns.c_friendlyNameColor_r, ns.c_friendlyNameColor_g, ns.c_friendlyNameColor_b)
+                else myPlate.nameText:SetTextColor(ns.c_hostileNameColor_r, ns.c_hostileNameColor_g, ns.c_hostileNameColor_b) end
             end
             myPlate._targetingMeActive = nil
-            originalColors[myPlate] = nil
         end
 
         -- Reset border to user's setting (respect disabled state)
@@ -3141,58 +3179,25 @@ local function UpdateTargetingMeVisual(myPlate, isTargetingMe)
     end
 end
 
--- Check if any arena enemy is targeting the player and return matching nameplate
--- Uses arena unit tokens (arena1target, arena2target, etc.) which are reliable
--- Returns the arena number (1-5) if that enemy is targeting player, nil otherwise
--- Tokens are precomputed: this runs per visible plate on every poll tick in
--- arena, and rebuilding "arenaN"/"arenaNtarget" re-hashed both strings each pass.
--- The token tables live in a do-block (captured as upvalues) because this file's
--- main chunk sits at Lua 5.1's 200-local ceiling - two more file-scope locals
--- failed to compile.
-local GetArenaNumberTargetingMe
-do
-    local ARENA_TOKENS        = { "arena1", "arena2", "arena3", "arena4", "arena5" }
-    local ARENA_TARGET_TOKENS = { "arena1target", "arena2target", "arena3target",
-                                  "arena4target", "arena5target" }
-    GetArenaNumberTargetingMe = function(name)
-        if not name then return nil end
-        -- Check each arena enemy's target
-        for i = 1, 5 do
-            local arenaName = UnitName(ARENA_TOKENS[i])
-            if arenaName and arenaName == name then
-                -- This arena enemy matches our nameplate - check their target
-                local targetToken = ARENA_TARGET_TOKENS[i]
-                if UnitExists(targetToken) and UnitIsUnit(targetToken, "player") then
-                    return i
-                end
-            end
-        end
-        return nil
-    end
-end
-
--- Update targeting me for all active nameplates (arena only)
 local function UpdateAllTargetingMe()
-    if not inArena then return end
-    if ns.c_targetingMeIndicator == "disabled" then return end
+    if not inArena or ns.c_targetingMeIndicator == "disabled" then return end
 
-    for unit, myPlate in pairs(ns.unitToPlate) do
-        -- Skip friendly nameplates (targeting me is hostile-only)
-        if UnitIsFriend("player", unit) then
-            -- Clear any stale targeting state on friendly plates
-            if myPlate and myPlate.isTargetingMe then
-                myPlate.isTargetingMe = nil
-                UpdateTargetingMeVisual(myPlate, false)
-            end
-        elseif myPlate and UnitExists(unit) then
-            -- Get the unit's name and check if any arena enemy with that name targets us
-            local unitName = UnitName(unit)
-            local arenaNum = GetArenaNumberTargetingMe(unitName)
-            local isTargetingMe = arenaNum ~= nil
+    for _, myPlate in pairs(ns.unitToPlate) do
+        if myPlate and myPlate.isTargetingMe then
+            myPlate.isTargetingMe = nil
+            UpdateTargetingMeVisual(myPlate, false)
+        end
+    end
 
-            if myPlate.isTargetingMe ~= isTargetingMe then
-                myPlate.isTargetingMe = isTargetingMe
-                UpdateTargetingMeVisual(myPlate, isTargetingMe)
+    for i = 1, 5 do
+        local arenaUnit = "arena" .. i
+        local targetUnit = arenaUnit .. "target"
+        if UnitExists(arenaUnit) and UnitExists(targetUnit) and UnitIsUnit(targetUnit, "player") then
+            local frame = C_NamePlate and C_NamePlate.GetNamePlateForUnit and C_NamePlate.GetNamePlateForUnit(arenaUnit)
+            local myPlate = frame and frame.myPlate
+            if myPlate and myPlate.hp and not UnitIsFriend("player", arenaUnit) then
+                myPlate.isTargetingMe = true
+                UpdateTargetingMeVisual(myPlate, true)
             end
         end
     end
@@ -3223,8 +3228,6 @@ UpdateTargetingMePolling = function()
                 UpdateTargetingMeVisual(myPlate, false)
             end
         end
-        -- Wipe stale color references
-        wipe(originalColors)
     end
 end
 
@@ -3717,7 +3720,7 @@ function ns:UpdatePlateStyle(myPlate)
         local castbarWidth = showIcon and (ns.c_width - iconSize - 2) or ns.c_width
 
         -- Cache castbar styling to avoid redundant calls
-        local cbNeedsUpdate = myPlate._lastCastWidth ~= castbarWidth or myPlate._lastCastHeight ~= ns.c_castHeight or myPlate._lastCastTexture ~= ns.c_texture or myPlate._lastCastShowIcon ~= showIcon
+        local cbNeedsUpdate = myPlate._lastCastWidth ~= castbarWidth or myPlate._lastCastHeight ~= ns.c_castHeight or myPlate._lastCastTexture ~= ns.c_texture or myPlate._lastCastShowIcon ~= showIcon or myPlate._lastCastYOffset ~= ns.c_castbarYOffset
 
         if cbNeedsUpdate then
             PixelUtil.SetWidth(myPlate.castbar, castbarWidth, 1)
@@ -3731,9 +3734,9 @@ function ns:UpdatePlateStyle(myPlate)
             end
 
             if showIcon then
-                PixelUtil.SetPoint(myPlate.castbar, "TOPLEFT", myPlate.hp, "BOTTOMLEFT", iconSize + 2, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOPLEFT", myPlate.hp, "BOTTOMLEFT", iconSize + 2, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             else
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             end
 
             -- Position and size icon (visibility controlled in cast event handlers)
@@ -3761,6 +3764,7 @@ function ns:UpdatePlateStyle(myPlate)
             -- Update cache
             myPlate._lastCastWidth = castbarWidth
             myPlate._lastCastHeight = ns.c_castHeight
+            myPlate._lastCastYOffset = ns.c_castbarYOffset
             myPlate._lastCastTexture = ns.c_texture
             myPlate._lastCastShowIcon = showIcon
         end
@@ -3788,7 +3792,7 @@ function ns:UpdatePlateStyle(myPlate)
                 local points = 0
                 if isPersonalPlate and ns.c_showComboPoints and ns.c_cpOnPersonalBar then
                     points = GetComboPoints("player", "target") or 0
-                elseif not isPersonalPlate and myPlate == ns.currentTargetPlate and ns.c_showComboPoints and not ns.c_cpOnPersonalBar then
+                elseif not isPersonalPlate and ns:IsTargetPlate(myPlate) and ns.c_showComboPoints and not ns.c_cpOnPersonalBar then
                     points = GetComboPoints("player", "target") or 0
                 end
                 for i = 1, #myPlate.cps do
@@ -3852,7 +3856,7 @@ function ns:UpdatePlateStyle(myPlate)
     end
 
     -- Update target glow style if this plate is the current target
-    if myPlate.targetGlow and ns.currentTargetPlate == myPlate then
+    if myPlate.targetGlow and ns:IsTargetPlate(myPlate) then
         UpdateTargetGlow(myPlate, true)
     end
 
@@ -3866,7 +3870,7 @@ function ns:UpdatePlateStyle(myPlate)
     if myPlate.isPlayer then
         -- Personal plate uses base scale
         targetScale = ns.c_scale
-    elseif myPlate == ns.currentTargetPlate then
+    elseif ns:IsTargetPlate(myPlate) then
         -- Current target uses target scale multiplier
         targetScale = ns.c_scale * ns.c_targetScale
     elseif myPlate.unit and UnitIsPet(myPlate.unit) then
@@ -4660,8 +4664,15 @@ UpdateColor = function(unit)
     -- Skip personal bar - it has its own color logic
     if myPlate.isPlayer then return end
 
+    local nativeReaction = ns.GetNativePlateReaction and ns.GetNativePlateReaction(unit)
     local isPlayer = UnitIsPlayer(unit)
-    local isFriendly = UnitIsFriend("player", unit)
+    local isFriendly
+    if nativeReaction ~= nil then
+        isFriendly = nativeReaction == "friendly" or nativeReaction == "friendlyPlayer"
+    else
+        isFriendly = UnitIsFriend("player", unit)
+    end
+    if nativeReaction == "friendlyPlayer" then isPlayer = true end
 
     -- Update threat text display
     UpdateThreatText(unit, myPlate)
@@ -4676,8 +4687,6 @@ UpdateColor = function(unit)
     -- EARLY RETURNS - Units that never get threat coloring
     -- ===========================================
 
-    -- 1. Friendly units.  Players use their own relationship color by default;
-    -- Class Colored Health remains an explicit override and now understands HERO.
     if isFriendly then
         if isPlayer and ns.c_classColoredHealth then
             local _, class = UnitClass(unit)
@@ -4687,21 +4696,14 @@ UpdateColor = function(unit)
                 return
             end
         end
-        if isPlayer then
-            local sr, sg, sb = ns.GetNameplateSourceColor and ns.GetNameplateSourceColor(unit)
-            if sr and sb and sb >= 0.85 and sr <= 0.20 then
-                myPlate.hp:SetStatusBarColor(sr, sg or 0, sb) -- pass through native Blizzard blue
-            else
-                myPlate.hp:SetStatusBarColor(0, 0, 1) -- stock 3.3.5 friendly-player blue
-            end
+        if nativeReaction == "friendlyPlayer" or isPlayer then
+            myPlate.hp:SetStatusBarColor(ns.c_friendlyPlayerColor_r, ns.c_friendlyPlayerColor_g, ns.c_friendlyPlayerColor_b)
         else
-            -- Preserve the stock TurboPlates friendly-NPC reaction colour.
-            myPlate.hp:SetStatusBarColor(0, 1, 0)
+            myPlate.hp:SetStatusBarColor(ns.c_friendlyNPCColor_r, ns.c_friendlyNPCColor_g, ns.c_friendlyNPCColor_b)
         end
         return
     end
 
-    -- 2. Hostile players never participate in NPC threat colouring.
     if isPlayer then
         if ns.c_classColoredHealth then
             local _, class = UnitClass(unit)
@@ -4711,12 +4713,12 @@ UpdateColor = function(unit)
                 return
             end
         end
-        myPlate.hp:SetStatusBarColor(1, 0, 0) -- Blizzard hostile-player red
+        myPlate.hp:SetStatusBarColor(ns.c_hpColor_r, ns.c_hpColor_g, ns.c_hpColor_b)
         return
     end
 
-    -- 3. Tapped NPCs (grey out mobs tagged by other players)
-    if UnitIsTapped(unit) and not UnitIsTappedByPlayer(unit) then
+    if nativeReaction == "tapped"
+       or (not nativeReaction and UnitIsTapped(unit) and not UnitIsTappedByPlayer(unit)) then
         myPlate.hp:SetStatusBarColor(ns.c_tappedColor_r, ns.c_tappedColor_g, ns.c_tappedColor_b)
         return
     end
@@ -4728,56 +4730,35 @@ UpdateColor = function(unit)
     end
 
     -- ===========================================
-    -- THREAT COLORING - Hostile NPCs and neutral mobs in combat
     -- ===========================================
+
+    if ns.c_tankMode == 0 then
+        if nativeReaction == "neutral" or UnitCreatureType(unit) == "Critter" then
+            myPlate.hp:SetStatusBarColor(ns.c_neutralColor_r, ns.c_neutralColor_g, ns.c_neutralColor_b)
+        else
+            myPlate.hp:SetStatusBarColor(ns.c_hpColor_r, ns.c_hpColor_g, ns.c_hpColor_b)
+        end
+        return
+    end
 
     -- Get threat status using UnitDetailedThreatSituation for more reliable results
     -- Returns: isTanking, status, threatPct, rawThreatPct, threatValue
     -- status: nil = not on threat table, 0 = not tanking (lowest threat), 1 = not tanking but higher threat,
     --         2 = insecurely tanking, 3 = securely tanking
     local isTanking, status = UnitDetailedThreatSituation("player", unit)
-
-    -- Stock 3.3.5a: the threat API can't read an UNBOUND plate token, so a mob
-    -- attacking you that isn't your target returned nil and missed threat colouring
-    -- (it stayed default hostile instead of your aggro colour). Only when the API
-    -- gave us nothing (status nil = unbound, or no threat data) do we fall back to
-    -- the combat log (ThreatAggro.lua), which knows it's hitting you with no token
-    -- needed, and treat that as full aggro. Restores the per-plate colouring the
-    -- token engine gave on Ascension; the existing branching paints it (DPS ->
-    -- dpsAggroColor, tank -> secureColor). We DON'T override a real status: in a
-    -- group a mob can cleave/AoE you without you holding aggro - the API knows.
-    if status == nil and ns.PlayerHasAggroFrom and ns.PlayerHasAggroFrom(myPlate, unit) then
-        isTanking, status = true, 3
+    if status == nil and ns.GetNativePlateThreatStatus then
+        status = ns.GetNativePlateThreatStatus(unit)
     end
 
-    -- 5. Neutral NPCs (reaction 4) and Critters - yellow if not in combat with us
-    local reaction = UnitReaction(unit, "player")
-    if status == nil and ((reaction and reaction == 4) or UnitCreatureType(unit) == "Critter") then
-        myPlate.hp:SetStatusBarColor(1, 1, 0)
-        return
-    end
-
-    -- If not on threat table at all (nil), use default hostile color - no threat coloring
-    -- Note: status 0 means ON threat table but lowest priority - still gets threat colors
     if status == nil then
-        myPlate.hp:SetStatusBarColor(ns.c_hpColor_r, ns.c_hpColor_g, ns.c_hpColor_b)
+        if nativeReaction == "neutral" or UnitCreatureType(unit) == "Critter" then
+            myPlate.hp:SetStatusBarColor(ns.c_neutralColor_r, ns.c_neutralColor_g, ns.c_neutralColor_b)
+        else
+            myPlate.hp:SetStatusBarColor(ns.c_hpColor_r, ns.c_hpColor_g, ns.c_hpColor_b)
+        end
         return
     end
 
-    -- From here, status is 0, 1, 2, or 3 - unit is on the threat table
-
-    -- Threat colouring only means something when another unit can compete for
-    -- aggro - a group/raid or your own pet. Solo with no pet you ALWAYS hold
-    -- aggro, yet stock 3.3.5a forces full aggro from the combat log for unbound
-    -- plates (ThreatAggro.lua), so every mob that hit you turned threat/tank
-    -- colour. Paint the plain hostile colour instead - matching the threat TEXT
-    -- (hidden solo) and awesome_wotlk. Grouped / pet players still get coloured.
-    if not (group.inGroup or UnitExists("pet")) then
-        myPlate.hp:SetStatusBarColor(ns.c_hpColor_r, ns.c_hpColor_g, ns.c_hpColor_b)
-        return
-    end
-
-    -- Determine if tank mode is active
     local tankModeActive = false
     local tankModeValue = ns.c_tankMode
 
@@ -4787,8 +4768,8 @@ UpdateColor = function(unit)
         tankModeActive = group.playerIsTank
     end
 
+
     if tankModeActive then
-        -- TANK MODE COLORS:
         -- status 3 = Secure aggro -> secureColor (good - you have solid aggro)
         -- status 2 = Insecure tanking -> transColor (warning - you have aggro but losing it)
         -- status 1 = High threat but not tanking -> check off-tank situation
@@ -4822,7 +4803,6 @@ UpdateColor = function(unit)
             end
         end
     else
-        -- DPS/HEALER MODE COLORS:
         -- status 3 = You have solid aggro -> dpsAggroColor (bad - you're tanking!)
         -- status 2 = You're tanking insecurely -> dpsTransColor (warning - losing aggro)
         -- status 1 = High threat but not tanking -> dpsTransColor (warning - watch your threat)
@@ -4906,7 +4886,6 @@ groupFrame:SetScript("OnEvent", function(self, event, unit)
             wipe(dirtyHealth)
             wipe(dirtyThreat)
             wipe(dirtyAbsorb)
-            wipe(originalColors)
             -- Clear all targeting me states on zone change
             for unit, myPlate in pairs(ns.unitToPlate) do
                 if myPlate and (myPlate.isTargetingMe or myPlate._targetingMeActive) then
@@ -4934,6 +4913,13 @@ end)
 -- Refresh ONLY the combo-point pips on the current target plate. Split out of
 -- UpdateTarget so combo-point events can update the pips without tearing down
 -- and rebuilding the target glow/scale.
+function ns.TargetAllowsResources()
+    if not UnitExists("target") then return false end
+    local canAttack = (ns.UnitCanAttack or UnitCanAttack)
+    if canAttack and canAttack("player", "target") then return true end
+    return not UnitIsFriend("player", "target")
+end
+
 local function RefreshTargetComboPoints()
     local plate = ns.currentTargetPlate
     if not plate then return end
@@ -4943,7 +4929,7 @@ local function RefreshTargetComboPoints()
         if plate.cps then
             for i = 1, #plate.cps do plate.cps[i]:Hide() end
         end
-    elseif ns.c_showComboPoints and not UnitIsFriend("player", "target") then
+    elseif ns.c_showComboPoints and ns.TargetAllowsResources() then
         EnsureComboPoints(plate, false)  -- false = target nameplate mode
         if plate.cps then
             local points = GetComboPoints("player", "target")
@@ -4959,43 +4945,17 @@ local function RefreshTargetComboPoints()
     end
 end
 
--- Update target/combo points and apply target scale
-local function UpdateTarget()
-    -- Fast path: the target itself hasn't changed (this fired for a combo-point
-    -- gain, e.g. Sinister Strike, not a real target switch). Rebuilding the glow
-    -- and scale here removed and re-applied the target glow on every combo-point
-    -- ability, which blinked the blue border (and briefly shrank the plate) on
-    -- each cast. Just refresh the combo-point pips and bail.
-    if UnitExists("target") and ns.currentTargetPlate
-       and ns.currentTargetGUID and ns.currentTargetGUID == UnitGUID("target") then
-        RefreshTargetComboPoints()
-        if ns.UpdateRunes then ns:UpdateRunes() end
-        return
-    end
-
-    -- Reset scale and glow on previous target
-    if ns.currentTargetPlate then
-        local prevPlate = ns.currentTargetPlate
-        local prevUnit = prevPlate.unit
-
-        -- Hide combo points on previous target
+function ns:ClearTargetOwnership(nextGUID, suppressNotify)
+    local prevPlate = ns.currentTargetPlate
+    if prevPlate then
+        prevPlate.isTarget = nil
         if prevPlate.cps then
-            for i = 1, #prevPlate.cps do
-                prevPlate.cps[i]:Hide()
-            end
+            for i = 1, #prevPlate.cps do prevPlate.cps[i]:Hide() end
         end
         UpdateTargetGlow(prevPlate, false)
 
-        -- Reset the still-visible previous target back to its normal scale. This
-        -- must NOT be gated on UnitGUID(token)==currentTargetGUID: on stock 3.3.5a
-        -- PLAYER_TARGET_CHANGED releases the plate's "target" match (compat tracker)
-        -- before this handler runs, so the token resolves to its synthetic GUID and
-        -- that check failed intermittently - leaving the old plate stuck at target
-        -- scale ("a nameplate stays enlarged, bigger than the others"). A genuinely
-        -- recycled plate would already have cleared currentTargetPlate via
-        -- OnNamePlateRemoved, so reaching here means the plate is still live. Read
-        -- the plate's own cached nature (isFriendly), not the now-unbound token.
         if not prevPlate.isPlayer then
+            local prevUnit = prevPlate.unit
             if prevUnit and UnitIsPet(prevUnit) then
                 ns:ApplyPlateScale(prevPlate, ns.c_scale * ns.c_petScale)
             elseif prevPlate.isFriendly then
@@ -5006,105 +4966,99 @@ local function UpdateTarget()
             prevPlate._lastScale = nil
         end
     end
+
     ns.currentTargetPlate = nil
-    ns.currentTargetGUID = nil
-
-    -- Find new target's nameplate
-    if UnitExists("target") then
-        ns.currentTargetGUID = UnitGUID("target")
-        local nameplate = C_NamePlate_GetNamePlateForUnit("target")
-        if nameplate and nameplate.myPlate and not nameplate.myPlate.isNameOnly then
-            ns.currentTargetPlate = nameplate.myPlate
-
-            -- Apply target scale (relative to base scale) - but not to personal bar
-            if not ns.currentTargetPlate.isPlayer then
-                ns:ApplyPlateScale(ns.currentTargetPlate, ns.c_scale * ns.c_targetScale)
-            end
-
-            -- Show target glow on new target
-            UpdateTargetGlow(ns.currentTargetPlate, true)
-
-            -- Combo points on the (new) target plate
-            RefreshTargetComboPoints()
-        end
-    end
-    if ns.UpdateRunes then ns:UpdateRunes() end
+    ns.currentTargetGUID = nextGUID
+    if not suppressNotify and ns.UpdateRunes then ns:UpdateRunes() end
 end
 
--- Validate target plate identity using GUID (called after stacking repositions)
--- Detects when WoW client swaps frame identities and reapplies target effects
-local function ValidateTargetPlate()
-    -- No target GUID means no target
-    if not ns.currentTargetGUID then
-        if ns.currentTargetPlate then
-            UpdateTargetGlow(ns.currentTargetPlate, false)
-            ns:ApplyPlateScale(ns.currentTargetPlate, ns.c_scale)
-            if ns.currentTargetPlate.cps then
-                for i = 1, #ns.currentTargetPlate.cps do
-                    ns.currentTargetPlate.cps[i]:Hide()
-                end
-            end
-            ns.currentTargetPlate = nil
-        end
+function ns:CommitTargetOwnership(plate, guid, suppressNotify)
+    if not plate or plate.isNameOnly then return false end
+
+    if ns.currentTargetPlate ~= plate then
+        ns:ClearTargetOwnership(guid, true)
+        ns.currentTargetPlate = plate
+    else
+        ns.currentTargetGUID = guid or ns.currentTargetGUID
+    end
+
+    plate.isTarget = true
+    if not plate.isPlayer then
+        ns:ApplyPlateScale(plate, ns.c_scale * ns.c_targetScale)
+    end
+    UpdateTargetGlow(plate, true)
+    RefreshTargetComboPoints()
+    if not suppressNotify and ns.UpdateRunes then ns:UpdateRunes(true) end
+    return true
+end
+
+function ns:ReleaseTargetOwnership(plate)
+    if not plate or ns.currentTargetPlate ~= plate then return false end
+    plate.isTarget = nil
+    ns.currentTargetPlate = nil
+    if ns.UpdateRunes then ns:UpdateRunes() end
+    return true
+end
+
+function ns:IsTargetPlate(plate)
+    return plate and ns.currentTargetPlate == plate and plate.isTarget == true
+end
+
+local function UpdateTarget()
+    local targetGUID = UnitExists("target") and UnitGUID("target") or nil
+
+    if targetGUID and ns.currentTargetPlate and ns.currentTargetGUID == targetGUID then
+        RefreshTargetComboPoints()
         if ns.UpdateRunes then ns:UpdateRunes() end
         return
     end
 
-    -- Check if cached plate still matches GUID
+    if not targetGUID then
+        ns:ClearTargetOwnership(nil)
+        return
+    end
+
+    ns:ClearTargetOwnership(targetGUID, true)
+    local nameplate = C_NamePlate_GetNamePlateForUnit("target")
+    if nameplate and nameplate.myPlate and not nameplate.myPlate.isNameOnly then
+        ns:CommitTargetOwnership(nameplate.myPlate, targetGUID)
+    elseif ns.UpdateRunes then
+        ns:UpdateRunes()
+    end
+end
+
+local function ValidateTargetPlate()
+    if not ns.currentTargetGUID then
+        ns:ClearTargetOwnership(nil)
+        return
+    end
+
     if ns.currentTargetPlate then
         local unit = ns.currentTargetPlate.unit
         local plateGUID = unit and UnitGUID(unit)
-        -- Still valid if the GUID matches, OR it's still alpha-identified as the
-        -- target. The alpha fallback covers a target the match tracker can't bind by
-        -- GUID: two+ same-named mobs at full HP are deliberately left UNBOUND (rule
-        -- 5), so UnitGUID(token) returns the synthetic guid and never equals
-        -- currentTargetGUID. FullPlateUpdate still scales+tracks that plate from
-        -- alpha (the engine dims non-targets); without this, ValidateTargetPlate -
-        -- which runs right after FullPlateUpdate in OnNamePlateAdded - would null the
-        -- correct currentTargetPlate, orphaning the target-scaled plate so detarget
-        -- has no reference to reset it (repro: target a mob before its plate appears,
-        -- next to a same-named twin -> plate stays enlarged).
         if plateGUID == ns.currentTargetGUID
            or (unit and UnitExists("target") and UnitIsUnit(unit, "target")) then
+            ns.currentTargetPlate.isTarget = true
             if ns.UpdateRunes then ns:UpdateRunes() end
-            return -- Still valid, no action needed
+            return
         end
-        -- Mismatch detected - remove effects from wrong plate
-        -- Skip scale reset - plate was recycled and OnNamePlateRemoved already handled it
-        UpdateTargetGlow(ns.currentTargetPlate, false)
-        if ns.currentTargetPlate.cps then
-            for i = 1, #ns.currentTargetPlate.cps do
-                ns.currentTargetPlate.cps[i]:Hide()
-            end
-        end
-        ns.currentTargetPlate = nil
+        ns:ClearTargetOwnership(ns.currentTargetGUID, true)
     end
 
-    -- Find correct plate by GUID
-    ns.currentTargetPlate = GetPlateByGUID(ns.currentTargetGUID)
-    if ns.currentTargetPlate then
-        -- Apply target effects to correct plate (skip personal bar)
-        if not ns.currentTargetPlate.isPlayer then
-            ns:ApplyPlateScale(ns.currentTargetPlate, ns.c_scale * ns.c_targetScale)
-        end
-        UpdateTargetGlow(ns.currentTargetPlate, true)
+    local plate = GetPlateByGUID(ns.currentTargetGUID)
+    if plate then
+        ns:CommitTargetOwnership(plate, ns.currentTargetGUID)
+        return
+    end
 
-        -- Restore combo points (only in target mode, not personal bar mode)
-        if ns.c_showComboPoints and not ns.c_cpOnPersonalBar and not UnitIsFriend("player", "target") then
-            EnsureComboPoints(ns.currentTargetPlate)
-            if ns.currentTargetPlate.cps then
-                local points = GetComboPoints("player", "target")
-                local numCPs = #ns.currentTargetPlate.cps
-                for i = 1, numCPs do
-                    if i <= points then
-                        ns.currentTargetPlate.cps[i]:Show()
-                    else
-                        ns.currentTargetPlate.cps[i]:Hide()
-                    end
-                end
-            end
+    if UnitExists("target") then
+        local nameplate = C_NamePlate_GetNamePlateForUnit("target")
+        if nameplate and nameplate.myPlate and not nameplate.myPlate.isNameOnly then
+            ns:CommitTargetOwnership(nameplate.myPlate, ns.currentTargetGUID)
+            return
         end
     end
+
     if ns.UpdateRunes then ns:UpdateRunes() end
 end
 
@@ -5112,17 +5066,6 @@ end
 ns.ValidateTargetPlate = ValidateTargetPlate
 
 -- Ensure raid icon exists (creates on-demand for any plate type)
-local function EnsureRaidIcon(myPlate)
-    if myPlate.raidIcon then return end
-
-    local myRaidIcon = myPlate:CreateTexture(nil, "OVERLAY")
-    PixelUtil.SetSize(myRaidIcon, ns.c_raidMarkerSize, ns.c_raidMarkerSize, 1, 1)
-    myRaidIcon:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
-    myRaidIcon:Hide()
-    myPlate.raidIcon = myRaidIcon
-end
-
--- Update level text for full plates
 local function UpdateLevelText(unit)
     local myPlate = ns.unitToPlate[unit]
     if not myPlate or not myPlate.levelText then return end
@@ -5351,51 +5294,52 @@ local function UpdateRaidIcon(unit)
     local myPlate = ns.unitToPlate[unit]
     if not myPlate then return end
 
-    local raidIndex = GetRaidTargetIndex(unit)
-    if raidIndex then
-        -- Create raid icon on-demand if it doesn't exist
-        EnsureRaidIcon(myPlate)
+    local blizzFrame = myPlate.parentPlate
+    local icon = blizzFrame and blizzFrame._tpRaidIcon
+    if not icon then
+        if myPlate.raidIcon then myPlate.raidIcon:Hide() end
+        return
+    end
 
-        -- Update size (cached)
-        if myPlate.raidIcon._lastSize ~= ns.c_raidMarkerSize then
-            PixelUtil.SetSize(myPlate.raidIcon, ns.c_raidMarkerSize, ns.c_raidMarkerSize, 1, 1)
-            myPlate.raidIcon._lastSize = ns.c_raidMarkerSize
-        end
-
-        -- Position caching (tracks mode + anchor + offsets)
-        local isNameOnly = myPlate.isNameOnly
-        local anchor = isNameOnly and "NAME_ONLY" or ns.c_raidMarkerAnchor
-        local xOff = isNameOnly and 0 or ns.c_raidMarkerX
-        local yOff = isNameOnly and 0 or ns.c_raidMarkerY
-
-        if myPlate.raidIcon._lastAnchor ~= anchor or myPlate.raidIcon._lastX ~= xOff or myPlate.raidIcon._lastY ~= yOff then
-            myPlate.raidIcon:ClearAllPoints()
-            if isNameOnly then
-                myPlate.raidIcon:SetPoint("BOTTOM", myPlate.nameText, "TOP", 0, 2)
-            else
-                if anchor == "LEFT" then
-                    myPlate.raidIcon:SetPoint("RIGHT", myPlate.hp, "LEFT", xOff - 2, yOff)
-                elseif anchor == "RIGHT" then
-                    myPlate.raidIcon:SetPoint("LEFT", myPlate.hp, "RIGHT", xOff + 2, yOff)
-                elseif anchor == "TOP" then
-                    myPlate.raidIcon:SetPoint("BOTTOM", myPlate.nameText, "TOP", xOff, yOff + 2)
-                else
-                    myPlate.raidIcon:SetPoint("RIGHT", myPlate.hp, "LEFT", xOff - 2, yOff)
-                end
-            end
-            myPlate.raidIcon._lastAnchor = anchor
-            myPlate.raidIcon._lastX = xOff
-            myPlate.raidIcon._lastY = yOff
-        end
-
-        SetRaidTargetIconTexture(myPlate.raidIcon, raidIndex)
-        myPlate.raidIcon:Show()
-    elseif myPlate.raidIcon then
+    if myPlate.raidIcon and myPlate.raidIcon ~= icon then
         myPlate.raidIcon:Hide()
     end
+    myPlate.raidIcon = icon
+
+    if icon:GetParent() ~= myPlate then icon:SetParent(myPlate) end
+    icon:SetAlpha(1)
+
+    if icon._lastSize ~= ns.c_raidMarkerSize then
+        PixelUtil.SetSize(icon, ns.c_raidMarkerSize, ns.c_raidMarkerSize, 1, 1)
+        icon._lastSize = ns.c_raidMarkerSize
+    end
+
+    local isNameOnly = myPlate.isNameOnly
+    local anchor = isNameOnly and "NAME_ONLY" or ns.c_raidMarkerAnchor
+    local xOff = isNameOnly and 0 or ns.c_raidMarkerX
+    local yOff = isNameOnly and 0 or ns.c_raidMarkerY
+
+    if icon._lastAnchor ~= anchor or icon._lastX ~= xOff or icon._lastY ~= yOff then
+        icon:ClearAllPoints()
+        if isNameOnly then
+            icon:SetPoint("BOTTOM", myPlate.nameText, "TOP", 0, 2)
+        else
+            if anchor == "LEFT" then
+                icon:SetPoint("RIGHT", myPlate.hp, "LEFT", xOff - 2, yOff)
+            elseif anchor == "RIGHT" then
+                icon:SetPoint("LEFT", myPlate.hp, "RIGHT", xOff + 2, yOff)
+            elseif anchor == "TOP" then
+                icon:SetPoint("BOTTOM", myPlate.nameText, "TOP", xOff, yOff + 2)
+            else
+                icon:SetPoint("RIGHT", myPlate.hp, "LEFT", xOff - 2, yOff)
+            end
+        end
+        icon._lastAnchor = anchor
+        icon._lastX = xOff
+        icon._lastY = yOff
+    end
+
 end
--- Exposed so the compat layer can re-read a plate's raid marker the moment it binds
--- to its real unit (a marker placed before the plate existed is otherwise missed).
 ns.UpdateRaidIcon = UpdateRaidIcon
 
 -- Ensure quest icon exists (creates on-demand for any plate type)
@@ -5938,7 +5882,6 @@ function ns:FullPlateUpdate(myPlate, unit)
         if myPlate.targetingMeGlow then myPlate.targetingMeGlow:Hide() end
         if myPlate._targetingMeActive then
             myPlate._targetingMeActive = nil
-            originalColors[myPlate] = nil
         end
     end
 
@@ -6080,16 +6023,16 @@ function ns:FullPlateUpdate(myPlate, unit)
             myPlate.castbar:ClearAllPoints()
             if showHP then
                 -- Anchor below HP bar
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             elseif showIcon and myPlate.totemIconFrame then
                 -- Anchor below totem icon
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.totemIconFrame, "BOTTOM", 0, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.totemIconFrame, "BOTTOM", 0, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             elseif showName then
                 -- Anchor below name
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.nameText, "BOTTOM", 0, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.nameText, "BOTTOM", 0, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             else
                 -- Fallback: anchor to plate center
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate, "BOTTOM", 0, 10, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate, "BOTTOM", 0, 10 + (ns.c_castbarYOffset or 0), 1, 1)
             end
         end
 
@@ -6278,8 +6221,6 @@ function ns:FullPlateUpdate(myPlate, unit)
 
     -- Set name color based on friendly/hostile status
     if isFriendly then
-        -- Friendly names use the custom Friendly Name color by default.
-        -- On normal servers, Class Colored Name may explicitly override it for players.
         local useClassColor = ns.c_classColoredName and isPlayer and class
         if useClassColor then
             local classColor = ns.GetClassColor(class)
@@ -6374,9 +6315,9 @@ function ns:FullPlateUpdate(myPlate, unit)
             myPlate.castbar:ClearAllPoints()
             if ns.c_showCastIcon then
                 local iconSize = ns.c_castHeight
-                PixelUtil.SetPoint(myPlate.castbar, "TOPLEFT", myPlate.hp, "BOTTOMLEFT", iconSize + 2, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOPLEFT", myPlate.hp, "BOTTOMLEFT", iconSize + 2, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             else
-                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2, 1, 1)
+                PixelUtil.SetPoint(myPlate.castbar, "TOP", myPlate.hp, "BOTTOM", 0, -2 + (ns.c_castbarYOffset or 0), 1, 1)
             end
         end
         myPlate._wasTotem = false
@@ -6430,50 +6371,23 @@ function ns:FullPlateUpdate(myPlate, unit)
         myPlate.totemIconFrame:Hide()
     end
 
-    -- Determine scale: pet scale, target scale, friendly scale, or normal scale
     local isTarget = UnitIsUnit(unit, "target")
+    if isTarget and not isPet then
+        ns:CommitTargetOwnership(myPlate, UnitGUID("target"), true)
+    elseif ns:IsTargetPlate(myPlate) and not isTarget then
+        ns:ClearTargetOwnership(ns.currentTargetGUID, true)
+    end
+
     if isPet then
         ns:ApplyPlateScale(myPlate, ns.c_scale * ns.c_petScale)
-    elseif isTarget then
+    elseif ns:IsTargetPlate(myPlate) then
         ns:ApplyPlateScale(myPlate, ns.c_scale * ns.c_targetScale)
-        -- Sync target reference and glow. Single-glow invariant: if another
-        -- plate still holds the reference it is stale - strip its target
-        -- visuals BEFORE stealing the reference. Every glow-clear path only
-        -- ever touches ns.currentTargetPlate, so reassigning without clearing
-        -- orphans the old plate's glow and TWO plates render the target border
-        -- (seen with same-named twins when identity briefly misresolved).
-        if ns.currentTargetPlate ~= myPlate then
-            local prevPlate = ns.currentTargetPlate
-            if prevPlate then
-                UpdateTargetGlow(prevPlate, false)
-                if prevPlate.cps then
-                    for i = 1, #prevPlate.cps do prevPlate.cps[i]:Hide() end
-                end
-                if not prevPlate.isPlayer then
-                    if prevPlate.unit and UnitIsPet(prevPlate.unit) then
-                        ns:ApplyPlateScale(prevPlate, ns.c_scale * ns.c_petScale)
-                    elseif prevPlate.isFriendly then
-                        ns:ApplyPlateScale(prevPlate, ns.c_scale * ns.c_friendlyScale)
-                    else
-                        ns:ApplyPlateScale(prevPlate, ns.c_scale)
-                    end
-                    prevPlate._lastScale = nil
-                end
-            end
-            ns.currentTargetPlate = myPlate
-        end
         UpdateTargetGlow(myPlate, true)
     elseif isFriendly then
         ns:ApplyPlateScale(myPlate, ns.c_scale * ns.c_friendlyScale)
+        UpdateTargetGlow(myPlate, false)
     else
         ns:ApplyPlateScale(myPlate, ns.c_scale)
-    end
-    -- Not the target: clear any leftover target glow from this recycled plate's
-    -- previous occupant. FullPlateUpdate is authoritative for scale+glow on show,
-    -- which lets OnNamePlateRemoved's deferred cleanup safely skip re-shown plates
-    -- without leaving a stale glow behind. (A real target sets it again above, or
-    -- ValidateTargetPlate does right after this on the GUID path.)
-    if not isTarget then
         UpdateTargetGlow(myPlate, false)
     end
 
@@ -6541,9 +6455,6 @@ function ns:FullPlateUpdate(myPlate, unit)
         ns:UpdateHealerIcon(myPlate, unit)
     end
 
-    -- Final root-distance ownership pass. FullPlateUpdate is the authoritative
-    -- construction/rebind path for recycled Blizzard nameplates. Re-apply the root
-    -- projection modifier here so returning plates cannot reappear at the raw Y.
     if ns.c_distanceYOffset and ns.RefreshPlateDistanceYOffset then
         ns:RefreshPlateDistanceYOffset(myPlate)
     end
@@ -6551,6 +6462,29 @@ end
 
 -- Create MINIMAL plate frame (just parent + nameText + guildText)
 -- Full components are added on-demand via EnsureFullPlate()
+function ns:RefreshNameDisplay()
+    for unit, myPlate in pairs(ns.unitToPlate or {}) do
+        if myPlate and myPlate.nameText and unit and UnitExists(unit) then
+            local name = UnitName(unit) or ""
+            local isPlayer = UnitIsPlayer(unit)
+            local isFriendly = UnitIsFriend("player", unit)
+
+            local arenaNum = (not isFriendly and isPlayer) and GetArenaNumber(unit)
+            if arenaNum then
+                myPlate.nameText:SetText(arenaNum)
+                myPlate.nameText:Show()
+            else
+                myPlate.nameText:SetText(ns:FormatName(name))
+                if ns.c_nameDisplayFormat == "disabled" then
+                    myPlate.nameText:Hide()
+                else
+                    myPlate.nameText:Show()
+                end
+            end
+        end
+    end
+end
+
 function ns:CreatePlateFrame(parentFrame, unit)
     local myPlate = CreateFrame("Frame", nil, parentFrame)
 
@@ -6847,7 +6781,7 @@ end
 eventFrame:SetScript("OnEvent", function(self, event, unit)
     if event == "UPDATE_MOUSEOVER_UNIT" then
         -- Mouseover changed - show highlight on new mouseover unit (if it's a nameplate)
-        if UnitExists("mouseover") then
+        if ns.c_mouseoverGlow ~= false and UnitExists("mouseover") then
             local mouseoverPlate = C_NamePlate_GetNamePlateForUnit("mouseover")
             if mouseoverPlate and mouseoverPlate._unit then
                 local mouseoverUnit = mouseoverPlate._unit

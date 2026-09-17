@@ -2,7 +2,7 @@
 ## Title: |cff4fa3ffT|cff5fb6f7u|cff6fcaefr|cff7fdee7b|cff8ff2d8o|cff9ff6b0P|cfffff68fl|cffffd36da|cffffb24at|cffff9138e|cffff3300s|r
 ## Notes: Go faster with world's most lightweight nameplates! (Backported to 3.3.5a by Jedborg)
 ## Author: Vupp (3.3.5a rework and new features) Jedborg (3.3.5a backport) — original TurboPlates by Miko (esurm)
-## Version: 1.4.6
+## Version: 1.4.5a
 ## SavedVariables: TurboPlatesDB
 
 # --- stock 3.3.5a compatibility shims (MUST load before everything) ---

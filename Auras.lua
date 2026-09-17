@@ -57,6 +57,7 @@ local playerGUID, petGUID
 local seenScratch = {}      -- reused: spellIDs already added (dedup across GUIDs)
 local reconcileSeen = {}    -- reused: spellIDs UnitAura reports on a bound unit
 local reconcileGUID = nil   -- set during a bound debuff pass to prune cleuByGUID
+local ownershipGUID = nil
 -- Memory backstop for a tracked debuff whose REMOVED/BROKEN event was missed AND
 -- whose duration was never learned. Removal is normally event-driven; a bound
 -- UnitAura read (reconciliation) corrects it the instant you look at the mob, so
@@ -841,6 +842,75 @@ local function ProcessAuraCallback(name, rank, icon, count, debuffType, duration
     tinsert(currentCollector, aura)
 end
 
+local function IsExplicitOwnCaster(caster, castByPlayer)
+    if castByPlayer == true then return true end
+    if caster == "player" or caster == "pet" or caster == "vehicle" then return true end
+    if caster and UnitExists(caster) then
+        local guid = UnitGUID(caster)
+        if guid and (guid == playerGUID or guid == petGUID) then return true end
+    end
+    return false
+end
+
+local function ProcessOwnedEnemyDebuff(name, rank, icon, count, debuffType, duration, expires,
+        caster, canStealOrPurge, shouldConsolidate, spellID, canApplyAura, isBossDebuff, castByPlayer)
+    if not name or not spellID then return end
+
+    if IsExplicitOwnCaster(caster, castByPlayer) then
+        return ProcessAuraCallback(name, rank, icon, count, debuffType, duration, expires,
+            caster, canStealOrPurge, shouldConsolidate, spellID)
+    end
+
+    local g = ownershipGUID and cleuByGUID[ownershipGUID]
+    local tracked = g and g.spells and g.spells[spellID]
+    if tracked then
+        if duration and duration > 0 then
+            durationBySpell[spellID] = duration
+            tracked.observedDuration = duration
+            if expires and expires > 0 and tracked.applied then
+                local expected = tracked.applied + duration
+                if math.abs(expires - expected) <= 2.0 then
+                    tracked.observedExpires = expires
+                else
+                    tracked.observedExpires = nil
+                end
+            end
+        end
+        if reconcileGUID then reconcileSeen[spellID] = true end
+    end
+end
+
+
+local function ReconcileRealUnitOwnedDebuffs(unit)
+    if not ns.IS_WOTLK_COMPAT or not unit or not UnitExists(unit) then return end
+    local guid = UnitGUID(unit)
+    local g = guid and cleuByGUID[guid]
+    if not (g and g.spells) then return end
+
+    for i = 1, 40 do
+        local name, _, _, count, _, duration, expires, caster,
+              _, _, spellID, _, _, castByPlayer = UnitAura(unit, i, "HARMFUL")
+        if not name then break end
+        local tracked = spellID and g.spells[spellID]
+        if tracked then
+            local explicitOwn = IsExplicitOwnCaster(caster, castByPlayer)
+            if duration and duration > 0 then
+                durationBySpell[spellID] = duration
+                tracked.observedDuration = duration
+            end
+            if explicitOwn then
+                if expires and expires > 0 then tracked.observedExpires = expires end
+                if count ~= nil then tracked.stacks = count end
+            elseif (not caster) and duration and duration > 0 and expires and expires > 0 and tracked.applied then
+                local expected = tracked.applied + duration
+                if math.abs(expires - expected) <= 2.0 then
+                    tracked.observedExpires = expires
+                end
+            end
+        end
+    end
+end
+
 -- =============================================================================
 -- SORTING COMPARATORS (Pre-defined, not created inline in sort() call)
 -- =============================================================================
@@ -1081,10 +1151,8 @@ do
                 if not s then s = {} g.spells[spellId] = s end
                 s.name = spellName
                 s.applied = GetTime()
-                -- Record pet-sourced so bound-read reconciliation skips it:
-                -- "HARMFUL|PLAYER" doesn't enumerate pet auras, so a present pet
-                -- debuff would otherwise be falsely pruned when you target the mob.
-                s.pet = (srcGUID == petGUID) or nil
+                s.observedExpires = nil
+                s.casterGUID = srcGUID
                 if subevent == "SPELL_AURA_APPLIED_DOSE"
                    or subevent == "SPELL_AURA_REMOVED_DOSE" then
                     s.stacks = amount
@@ -1142,14 +1210,20 @@ local function AddTrackedSpell(collector, spellID, s, now, seen)
     if seen[spellID] then return end
     if ns.AuraBlacklist and rawget(ns.AuraBlacklist, spellID) then return end
     seen[spellID] = true
-    local dur = durationBySpell[spellID]
+    local dur = s.observedDuration or durationBySpell[spellID]
+    local expires = 0
+    if s.observedExpires and s.observedExpires > now then
+        expires = s.observedExpires
+    elseif dur and dur > 0 and s.applied then
+        expires = s.applied + dur
+    end
     local aura = AcquireAuraData()
     aura.name = s.name
     aura.icon = GetCachedIcon(spellID, nil)
     aura.count = s.stacks or 0
     aura.debuffType = nil
     aura.duration = dur or 0
-    aura.expires = dur and (s.applied + dur) or 0
+    aura.expires = expires
     aura.canStealOrPurge = false
     aura.spellID = spellID
     aura.isDebuff = true
@@ -1214,12 +1288,33 @@ end
 -- Ambiguous (>=2 same-named visible) -> show nothing.
 local function MergeTrackedDebuffs(myPlate, unit, collector)
     if not ns.IS_WOTLK_COMPAT then return end
-    if ns.GetPlateRealUnit and ns.GetPlateRealUnit(unit) then return end  -- bound
     local name = UnitName(unit)
     if not name then return end
     local now = GetTime()
     local seen = seenScratch
     wipe(seen)
+    for i = 1, #collector do
+        local aura = collector[i]
+        if aura and aura.spellID then seen[aura.spellID] = true end
+    end
+
+    local realUnit = ns.GetPlateRealUnit and ns.GetPlateRealUnit(unit)
+    if realUnit then
+        local guid = UnitGUID(realUnit)
+        local g = guid and cleuByGUID[guid]
+        if g then
+            for spellID, tracked in pairs(g.spells) do
+                local dur = durationBySpell[spellID]
+                if dur and tracked.applied + dur <= now then
+                    g.spells[spellID] = nil
+                else
+                    AddTrackedSpell(collector, spellID, tracked, now, seen)
+                end
+            end
+            if not next(g.spells) then DropTrackedGUID(guid) end
+        end
+        return
+    end
 
     -- awesome_wotlk: when the DLL gives this plate a real "nameplateN" token it resolves
     -- to the EXACT mob, even though the name+health match hasn't bound it. Read THAT
@@ -1392,32 +1487,29 @@ function ns:UpdateAuras(myPlate, unit)
         ReleaseAllAuraData(debuffCollector)
         ReleaseAllAuraData(buffCollector)
 
-        -- Collect debuffs (HARMFUL|PLAYER = only your DoTs on enemy)
         if ns.c_showDebuffs then
             currentAuraType = "debuff"
             currentCollector = debuffCollector
 
-            -- When this plate is bound, the UnitAura read below is authoritative for
-            -- which of YOUR debuffs the mob still has. Arm reconciliation so any
-            -- player-sourced cleuByGUID entry UnitAura no longer reports (a broken or
-            -- expired CC whose REMOVED/BROKEN event we missed) is pruned now - looking
-            -- at the mob self-corrects the cache instead of waiting for the sweep.
-            -- Pet-sourced entries are excluded: "HARMFUL|PLAYER" doesn't list pet
-            -- auras, so reconcileSeen wouldn't see them (they'd be falsely pruned).
             local realUnit = ns.GetPlateRealUnit and ns.GetPlateRealUnit(unit)
             local rguid = realUnit and UnitGUID(realUnit)
+            ownershipGUID = rguid
             if rguid and cleuByGUID[rguid] then
                 reconcileGUID = rguid
                 wipe(reconcileSeen)
             end
 
-            AuraUtil.ForEachAura(unit, "HARMFUL|PLAYER", 40, ProcessAuraCallback)
+            if ns.IS_WOTLK_COMPAT then
+                AuraUtil.ForEachAura(unit, "HARMFUL", 40, ProcessOwnedEnemyDebuff)
+            else
+                AuraUtil.ForEachAura(unit, "HARMFUL|PLAYER", 40, ProcessAuraCallback)
+            end
 
             if reconcileGUID then
                 local g = cleuByGUID[reconcileGUID]
                 if g then
-                    for spellID, s in pairs(g.spells) do
-                        if not reconcileSeen[spellID] and not s.pet then
+                    for spellID in pairs(g.spells) do
+                        if not reconcileSeen[spellID] then
                             g.spells[spellID] = nil
                         end
                     end
@@ -1425,9 +1517,8 @@ function ns:UpdateAuras(myPlate, unit)
                 end
                 reconcileGUID = nil
             end
+            ownershipGUID = nil
 
-            -- Add combat-log-tracked debuffs for plates with no real unit token
-            -- (e.g. Pestilence-spread diseases on unbound adds). No-op when bound.
             MergeTrackedDebuffs(myPlate, unit, debuffCollector)
             myPlate.debuffContainer:Show()
         else
@@ -1705,9 +1796,7 @@ local function SetupAuraEvents()
                 elseif unit == "player" and (trackPlayerAurasForDisplay or trackPlayerDebuffs) then
                     pendingPlayerAura = true
                 elseif COMPAT_AURA_UNITS and COMPAT_AURA_UNITS[unit] then
-                    -- Stock 3.3.5a: UNIT_AURA fired for the real unit, not a
-                    -- nameplate token. The loop below resolves it to its matched
-                    -- plate via GetNamePlateForUnit and updates with the real unit.
+                    ReconcileRealUnitOwnedDebuffs(unit)
                     batchUnitsToUpdate[unit] = true
                 end
             end
@@ -1764,6 +1853,12 @@ end
 
 -- Initialize when addon loads
 local initFrame = CreateFrame("Frame")
+local targetAuraReconcileFrame = CreateFrame("Frame")
+targetAuraReconcileFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+targetAuraReconcileFrame:SetScript("OnEvent", function()
+    ReconcileRealUnitOwnedDebuffs("target")
+end)
+
 initFrame:RegisterEvent("PLAYER_LOGIN")
 initFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 initFrame:SetScript("OnEvent", function(self, event)

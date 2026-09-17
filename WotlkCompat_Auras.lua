@@ -45,12 +45,7 @@ if NEED_AURA_SHIM or type(AuraUtil.ForEachAura) ~= "function" then
         -- HELPFUL/HARMFUL list and decide "is it mine?" ourselves.
         --
         -- "Mine" via unitCaster mirrors retail's "PLAYER" filter, which is really
-        -- isFromPlayerOrPlayerPet, so player + pet + vehicle pass. But unitCaster
-        -- is unreliable on some 3.3.5a cores (returns nil for every aura); when it
-        -- is absent we must NOT silently drop everything. In that case we pass the
-        -- aura through and let the consumer's own duration>0 check do the work -
-        -- on 3.3.5a the client only timestamps auras YOU applied, so duration>0 is
-        -- itself a sound "cast by me" signal.
+        --
         local auraFilter = (filter:find("HARMFUL") and "HARMFUL" or "HELPFUL")
         local playerOnly = filter:find("PLAYER") and true or false
         local limit = maxCount or 40
@@ -61,7 +56,7 @@ if NEED_AURA_SHIM or type(AuraUtil.ForEachAura) ~= "function" then
             if not name then break end
             local mine = (not playerOnly)
                 or caster == "player" or caster == "pet" or caster == "vehicle"
-                or caster == nil  -- core didn't report a caster: defer to duration>0
+                or castByPlayer == true
             if mine then
                 local stop = callback(name, rank, icon, count, debuffType, duration,
                     expires, caster, isStealable, shouldConsolidate, spellID,

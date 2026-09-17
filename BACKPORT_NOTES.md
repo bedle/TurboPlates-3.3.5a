@@ -1,7 +1,6 @@
 # TurboPlates — stock 3.3.5a backport (name-based rewrite)
 
-TurboPlates for an **unpatched 3.3.5a (WotLK 30300)** client. 
-**Backported by Jedborg rework and update by Vupp**
+TurboPlates for an **unpatched 3.3.5a (WotLK 30300)** client. **Backported by Jedborg.**
 
 This document is the architecture map for the backport: the core problem, the
 data layer that solves it, and the hard-won rules behind every subsystem. If you
@@ -12,14 +11,14 @@ them are reverted-and-rediscovered the hard way.
 
 ## The core problem
 
-TurboPlates was written for modern nameplate engine, where the
+TurboPlates was written for Ascension's modern nameplate engine, where the
 client gives the addon a real **unit token** per nameplate. It then calls
 `UnitName(unit)`, `UnitGUID(unit)`, `UnitHealth(unit)`, `UnitIsFriend(unit)`,
 `UnitClass(unit)`, … on that token in ~110 places.
 
 A stock, unpatched 3.3.5a client has **no nameplate unit tokens at all** (those
-only exist on patched clients running AwesomeWotLK / FrostAtom. 
-So on a normal core, every one of those calls returns
+only exist on patched clients running AwesomeWotLK / FrostAtom, which Ascension
+effectively bundles). So on a normal core, every one of those calls returns
 nil/false for any plate that isn't your current target — the addon can't tell
 friend from foe, read a name, a class, or health.
 
@@ -48,7 +47,7 @@ surgical hooks inside TurboPlates' own files:
   `WOW_PROJECT_*` constants. Also hardens `GameTooltip:SetSpellByID` /
   `SetHyperlink` against unknown spell ids (those crash the client natively).
 - **`WotlkCompat.lua`** — the name-based nameplate engine: WorldFrame polling +
-  texture-fingerprint plate discovery (TidyPlate's method), region/bar scraping
+  texture-fingerprint plate discovery (NotPlater's method), region/bar scraping
   with hooks that survive TurboPlates reparenting the Blizzard bar, the match
   tracker, the wrapped `Unit*` family, `C_NamePlate` / `C_NamePlateManager`, and
   the combat-log mirrors for casts/identity.
@@ -67,7 +66,7 @@ reports `"native"` vs `"namebased-335"`).
 
 ## Two platforms: stock vs awesome_wotlk
 
-`ns.IS_WOTLK_COMPAT` is true on **both** platforms; the real
+`ns.IS_WOTLK_COMPAT` is true on **both** non-Ascension platforms; the real
 discriminator is **`ns.HAVE_AWESOME_WOTLK`** (the FrostAtom DLL):
 
 - **awesome_wotlk (FrostAtom DLL present).** Every managed plate carries a **real
@@ -91,13 +90,9 @@ can never change the working DLL behaviour.
 
 ## How reaction (friend/foe) is determined
 
-Read from the default nameplate health-bar colour, like TidyPlates and pass it directly 
-to nameplates in following order:
-Is unit friendly - yes - use friendly NPC `{0,1,0}`,
-is unit player - yes - is unit friendly - yes - friendly player `{0,0.6,1}`,
-Is unit enemy - yes - hostile `{1,0,0}`
-Is unit neutral - yes - neutral `{1,1,0}`,
-Tapped `{0.5,0.5,0.5}`.
+Read from the default nameplate health-bar colour, like NotPlater:
+hostile `{1,0,0}`, neutral `{1,1,0}`, friendly NPC `{0,1,0}`, friendly player
+`{0,0.6,1}`, tapped `{0.5,0.5,0.5}`.
 
 ---
 
@@ -450,4 +445,6 @@ plate's regions + scale for diagnosis.
 8. **Diagnose which root** a same-named bleed has (match-tracker vs CLEU path)
    before fixing.
 
-TidyPlate is the reference implementation for this client
+NotPlater is the reference implementation for this client:
+<https://github.com/RichSteini/NotPlater> (`modules/matchTracker.lua`,
+`modules/aura/*`, `NotPlater.lua` IsTarget).

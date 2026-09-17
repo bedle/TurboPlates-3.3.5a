@@ -291,6 +291,7 @@ ns.L = {
     Width = "Nameplate Width",
     HpHeight = "Healthbar Height",
     CastHeight = "Castbar Height",
+    CastbarYOffset = "Castbar Offset Y",
     ShowCastIcon = "Show Icon",
     HealthBarBorder = "Healthbar Border",
     Scale = "Nameplate Scale",
@@ -305,18 +306,20 @@ ns.L = {
     RaidMarkerY = "Raid Marker Y",
     Texture = "Bar Texture",
     BackgroundAlpha = "Background Alpha",
-    HpColor = "Enemy NPC",
+    HpColor = "Enemy",
+    FriendlyPlayerHealthColor = "Friendly Player",
+    FriendlyNPCHealthColor = "Friendly NPC",
+    NeutralHealthColor = "Neutral",
     CastColor = "Normal Cast",
     NoInterruptColor = "Non-Interruptible",
-    TankMode = "Tank Mode",
+    TankMode = "Aggro Mode",
     TankModeDisabled = "Disabled",
     TankModeSmart = "Smart (Auto)",
-    TankModeEnabled = "Always On",
+    TankModeEnabled = "Tank Mode",
     FriendlyFontSize = "Friendly Name-Only Size",
     GuildFontSize = "Friendly Guild Name Size",
 
-    -- Tank Mode Colors
-    TankColors = "Tank Mode Colors:",
+    TankColors = "Tank Colors:",
     CastbarColors = "Castbar Colors:",
     BaseColors = "Nameplate Colors:",
     EnemyNameColor = "Enemy Name",
@@ -327,7 +330,6 @@ ns.L = {
     InsecureColor = "Lost",
     OffTankColor = "Off-Tank",
 
-    -- DPS Mode Colors
     DpsColors = "DPS/Healer Colors:",
     DpsSecureColor = "Safe",
     DpsTransColor = "Warning",
@@ -724,11 +726,12 @@ ns.defaults = {
     width = 100,
     hpHeight = 8,
     castHeight = 6,
+    castbarYOffset = 0,
     scale = 1,
     targetScale = 1.2,
     friendlyScale = 1.0,
-    distanceScaling = false,  -- Scale world plates from Blizzard native child depth; Personal Bar excluded
-    distanceYOffset = false,  -- Enable the distance-based Y adjustment for world nameplates
+    distanceScaling = false,
+    distanceYOffset = false,
     distanceYOffsetMax = 0,
     healthBarBorder = true,  -- Show 1px border around health bar
     raidMarkerSize = 20,
@@ -738,15 +741,16 @@ ns.defaults = {
     texture = "Clean",  -- LSM name (was path)
     backgroundAlpha = 0.6,  -- Healthbar background transparency (0-1)
     hpColor = { r = 1, g = 0.2, b = 0.2 },
+    friendlyPlayerColor = { r = 0.31, g = 0.45, b = 0.63 },
+    friendlyNPCColor = { r = 0.29, g = 0.68, b = 0.30 },
+    neutralColor = { r = 0.85, g = 0.77, b = 0.36 },
     castColor = { r = 1, g = 0.8, b = 0 },
     noInterruptColor = { r = 1, g = 0.384, b = 0 },  -- rgb(255, 98, 0)
-    tankMode = 0,  -- 0=Disabled, 1=Smart (auto-detect), 2=Always On
-    -- Tank Mode Colors
+    tankMode = 0,
     secureColor = { r = 1, g = 0, b = 1 },       -- Magenta - Tank has aggro (good)
     transColor = { r = 1, g = 0.8, b = 0 },      -- Orange - Losing threat (warning)
     insecureColor = { r = 1, g = 0, b = 0 },     -- Red - No aggro (bad)
     offTankColor = { r = 0.2, g = 0.7, b = 0.5 },-- Teal - Another tank has it
-    -- DPS/Healer Mode Colors
     dpsSecureColor = { r = 1, g = 0, b = 1 },    -- Magenta - Safe, no threat (matches tank secure)
     dpsTransColor = { r = 1, g = 0.8, b = 0 },   -- Orange - High threat (warning)
     dpsAggroColor = { r = 1, g = 0, b = 0 },     -- Red - Have aggro (bad)
@@ -768,7 +772,7 @@ ns.defaults = {
     liteHealthWhenDamaged = true,  -- Show compact HP bar when damaged
     friendlyGuild = false,
     npcTitleCache = {},  -- [npcID] = title (cached via tooltip scan)
-    classColoredHealth = true,  -- Normal-server default; forcibly disabled at runtime only for classless HERO players
+    classColoredHealth = true,
     classColoredName = false,   -- Use custom hostile name color (not class colored)
     arenaNumbers = false,       -- Replace enemy names with arena numbers in arena
     healerMarks = 3,            -- 0 = disabled, 1 = enemies only, 2 = friendly only, 3 = both
@@ -790,6 +794,7 @@ ns.defaults = {
     targetGlow = "border",  -- Target glow style: none, border, thick, thin
     targetArrow = "none",   -- Target arrow style: none, arrows_thin, arrows_normal, arrows_double
     targetGlowColor = { r = 0, g = 1, b = 1 },  -- Neon cyan
+    mouseoverGlow = true,
     mouseoverGlowColor = { r = 1, g = 1, b = 1 },  -- White mouseover glow by default
     tappedColor = { r = 0.5, g = 0.5, b = 0.5 },  -- Grey for tapped units
     -- Quest objective icons
@@ -803,23 +808,21 @@ ns.defaults = {
     friendlyNameColor = { r = 1, g = 1, b = 1 },  -- White by default
     showComboPoints = false,  -- Enable combo points display
     cpOnPersonalBar = false,  -- Show combo points on personal bar instead of target nameplate
-    cpStyle = 1,  -- Combo point style
+    cpStyle = 1,
     cpSize = 12,
     cpX = 0,
     cpY = 0,
     cpPersonalX = 0,  -- X offset for personal bar combo points
     cpPersonalY = 0,  -- Y offset for personal bar combo points
 
-    -- Death Knight runes (also available to classless HERO characters when the
-    -- native 3.3.5 rune API actually exposes rune data).
     showRunes = false,
     runesOnPersonalBar = false,
     runeStyle = 1,
     runeSize = 12,
     runeX = 0,
-    runeY = 8,            -- Keep a default gap above Combo Points
+    runeY = 8,
     runePersonalX = 0,
-    runePersonalY = 8,    -- Keep a default gap above Combo Points on Personal Bar
+    runePersonalY = 8,
     minimap = { hide = false, pos = 45 },
     potatoMode = false,  -- Halves all update frequencies to reduce CPU usage
     nonTargetAlpha = 0.6,   -- Manual alpha for non-targeted nameplates (0-1)
@@ -865,7 +868,6 @@ ns.defaults = {
 
     -- === AURA TRACKING ===
     auras = {
-        -- Debuffs (Your DoTs on enemies) - HARMFUL|PLAYER filter
         showDebuffs = true,
         maxDebuffs = 6,
         debuffIconWidth = 20,
@@ -993,11 +995,6 @@ local function DeepCopy(orig)
     return copy
 end
 
--- SavedVariables are user-editable and profile imports can come from older builds.
--- Repair known settings against the default schema before any runtime cache reads
--- them. This is deliberately conservative: unknown keys are preserved, valid user
--- values are never clamped except RGB(A) channels, and partial imports only repair
--- keys that are actually present at the top level.
 local function IsFiniteNumber(value)
     return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
 end
@@ -1019,7 +1016,6 @@ local function MergeDefaultSchema(dst, defaults, fillMissing)
             if type(value) ~= "table" then
                 dst[key] = DeepCopy(defaultValue)
             else
-                -- Once a nested settings table exists, make it complete recursively.
                 MergeDefaultSchema(value, defaultValue, true)
             end
         elseif type(defaultValue) == "number" then
@@ -1051,7 +1047,8 @@ function ns:RepairSettingsStructure(settings, fillMissingTopLevel)
     MergeDefaultSchema(settings, ns.defaults, fillMissingTopLevel == true)
 
     local colorKeys = {
-        "hpColor", "castColor", "noInterruptColor", "petColor",
+        "hpColor", "friendlyPlayerColor", "friendlyNPCColor", "neutralColor",
+        "castColor", "noInterruptColor", "petColor",
         "targetGlowColor", "tappedColor", "hostileNameColor", "friendlyNameColor",
         "secureColor", "transColor", "insecureColor", "offTankColor",
         "dpsSecureColor", "dpsTransColor", "dpsAggroColor",
@@ -1097,7 +1094,6 @@ function ns:RepairSettingsStructure(settings, fillMissingTopLevel)
         settings.distanceYOffsetMax = value
     end
 
-    -- Keep minimap position arithmetic safe even after hand-edited SavedVariables.
     if type(settings.minimap) == "table" and ns.defaults.minimap then
         if not IsFiniteNumber(settings.minimap.pos) then
             settings.minimap.pos = ns.defaults.minimap.pos
@@ -1107,10 +1103,6 @@ function ns:RepairSettingsStructure(settings, fillMissingTopLevel)
         end
     end
 
-    -- These persistent maps intentionally live outside ns.defaults because they
-    -- are exported/imported as separate data categories or learned at runtime.
-    -- Validate them explicitly so a malformed profile cannot turn a later pairs()/
-    -- table index into a hard Lua error.
     if settings.highlightSpells ~= nil then
         local repaired = {}
         if type(settings.highlightSpells) == "table" then
@@ -1139,14 +1131,9 @@ function ns:RepairSettingsStructure(settings, fillMissingTopLevel)
 end
 
 function ns:LoadVariables()
-    -- A damaged/hand-edited SavedVariables file can replace the root table itself.
-    -- Recover before touching any fields so startup cannot die on a string/number.
     if type(TurboPlatesDB) ~= "table" then TurboPlatesDB = {} end
 
-    -- Player plates use Blizzard's fixed reaction colours. Remove obsolete custom
-    -- player-colour keys from existing SavedVariables instead of carrying dead state.
     TurboPlatesDB.enemyPlayerColor = nil
-    TurboPlatesDB.friendlyPlayerColor = nil
 
     if TurboPlatesDB.language ~= nil then
         TurboPlatesDB.language = NormalizeLanguage(TurboPlatesDB.language)
@@ -1156,8 +1143,6 @@ function ns:LoadVariables()
         ns:ApplyActiveLocale()
     end
 
-    -- Fill missing defaults recursively and repair type-corrupted values before
-    -- any migration/cache code performs arithmetic or method calls on them.
     ns:RepairSettingsStructure(TurboPlatesDB, true)
 
     -- Migrate the previous temporary default now that the base name position is corrected.
@@ -1295,8 +1280,6 @@ function ns:LoadVariables()
         TurboPlatesDB.auras.nameplateColorRules = DeepCopy(ns.defaults.auras.nameplateColorRules)
     end
 
-    -- On a classless HERO player these settings must never remain enabled.
-    -- The detector checks BOTH UnitClass returns and is evaluated at runtime.
     if ns.IsClasslessHeroPlayer and ns.IsClasslessHeroPlayer() then
         TurboPlatesDB.classColoredHealth = false
         TurboPlatesDB.classColoredName = false
@@ -1307,9 +1290,6 @@ function ns:LoadVariables()
         ns:UpdateDBCache()
     end
 end
--- Some private 3.3.5 cores do not expose the custom player class until the
--- world is entered. Re-assert the classless lock there so an old profile cannot
--- briefly restore class-colour options before the GUI is opened.
 local heroClasslessGuard = CreateFrame("Frame")
 heroClasslessGuard:RegisterEvent("PLAYER_ENTERING_WORLD")
 heroClasslessGuard:SetScript("OnEvent", function()

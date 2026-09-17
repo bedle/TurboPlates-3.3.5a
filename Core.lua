@@ -126,7 +126,7 @@ do
 
         local alpha
         if ns.currentTargetGUID and ns.c_nonTargetAlpha and ns.c_nonTargetAlpha < FULL_ALPHA then
-            local isTarget = nameplate.cachedGUID == ns.currentTargetGUID
+            local isTarget = ns.IsTargetPlate and ns:IsTargetPlate(nameplate) or false
             alpha = isTarget and FULL_ALPHA or ns.c_nonTargetAlpha
         else
             alpha = FULL_ALPHA
@@ -166,7 +166,7 @@ do
         if a ~= nameplate:GetAlpha() then
             nameplate:SetAlpha(a)
         end
-        local level = parent:GetFrameLevel()
+        local level = nameplate._tpZLevel or parent:GetFrameLevel()
         if level ~= nameplate:GetFrameLevel() then
             nameplate:SetFrameLevel(level)
         end
@@ -244,9 +244,6 @@ do
         nameplate:SetParent(WorldFrame)
         nameplate:ClearAllPoints()
 
-        -- Initial position.  Use the same authoritative root composer used by
-        -- runtime motion so a plate first appearing at range starts in the same
-        -- coordinate path as an already-visible plate.
         local x, y = movementCallback:GetSize()
         SmoothMoveNameplate(nameplate, x, y, true)
 
@@ -311,20 +308,103 @@ end
 local ApplyFPSIncrease = C_NamePlateManager.ApplyFPSIncrease
 local DisableBlizzPlate = C_NamePlateManager.DisableBlizzPlate
 local EnumerateActiveNamePlates = C_NamePlateManager.EnumerateActiveNamePlates
+
+local ZORDER_BASE = 100
+local ZORDER_STRIDE = 32
+local zorderPlates = {}
+
+local function CaptureChildZOffsets(frame, rootLevel)
+    local children = { frame:GetChildren() }
+    for i = 1, #children do
+        local child = children[i]
+        if child and child.GetFrameLevel and child.SetFrameLevel then
+            if child._tpZOffset == nil then
+                child._tpZOffset = child:GetFrameLevel() - rootLevel
+            end
+            CaptureChildZOffsets(child, rootLevel)
+        end
+    end
+end
+
+local function ApplyChildZOffsets(frame, rootLevel)
+    local children = { frame:GetChildren() }
+    for i = 1, #children do
+        local child = children[i]
+        if child and child.GetFrameLevel and child.SetFrameLevel then
+            if child._tpZOffset == nil then
+                child._tpZOffset = child:GetFrameLevel() - rootLevel
+            end
+            local level = rootLevel + child._tpZOffset
+            if child:GetFrameLevel() ~= level then
+                child:SetFrameLevel(level)
+            end
+            ApplyChildZOffsets(child, rootLevel)
+        end
+    end
+end
+
+local function SetPlateZLevel(plate, level)
+    if not plate then return end
+    local oldLevel = plate:GetFrameLevel()
+    if plate._tpZLevel == nil then
+        CaptureChildZOffsets(plate, oldLevel)
+    end
+    if oldLevel ~= level then
+        plate:SetFrameLevel(level)
+    end
+    ApplyChildZOffsets(plate, level)
+    plate._tpZLevel = level
+end
+
+function ns:RefreshPlateZOrder()
+    wipe(zorderPlates)
+    local target
+    for nameplate in EnumerateActiveNamePlates() do
+        local plate = nameplate and nameplate.myPlate
+        if plate and plate:IsShown() and not plate.isNameOnly then
+            if ns.IsTargetPlate and ns:IsTargetPlate(plate) then
+                target = plate
+            else
+                local _, y = plate:GetCenter()
+                zorderPlates[#zorderPlates + 1] = { plate = plate, y = y or 0 }
+            end
+        end
+    end
+    table.sort(zorderPlates, function(a, b)
+        if a.y == b.y then return tostring(a.plate) < tostring(b.plate) end
+        return a.y > b.y
+    end)
+    for i = 1, #zorderPlates do
+        SetPlateZLevel(zorderPlates[i].plate, ZORDER_BASE + (i - 1) * ZORDER_STRIDE)
+    end
+    if target then
+        SetPlateZLevel(target, ZORDER_BASE + (#zorderPlates + 1) * ZORDER_STRIDE)
+    end
+end
+
+local zorderDriver = CreateFrame("Frame")
+zorderDriver._elapsed = 0
+zorderDriver:SetScript("OnUpdate", function(self, elapsed)
+    self._elapsed = self._elapsed + elapsed
+    if self._elapsed < 0.05 then return end
+    self._elapsed = 0
+    ns:RefreshPlateZOrder()
+end)
 local GetNamePlateForUnit = C_NamePlate.GetNamePlateForUnit
 
 local Core = CreateFrame("Frame")
 Core:RegisterEvent("PLAYER_LOGIN")
+Core:RegisterEvent("PLAYER_ENTERING_WORLD")
 Core:RegisterEvent("PLAYER_REGEN_ENABLED")  -- Combat ends - finish deferred DisableBlizzPlate calls
 Core:RegisterEvent("PLAYER_LEVEL_UP")  -- Refresh level text when player levels up
 
 
 ns.Core = Core
-ns.unitToPlate = setmetatable({}, { __mode = "v" })     -- [unit] = myPlate; transient frame values
-ns.unitToNameplate = setmetatable({}, { __mode = "v" }) -- [unit] = Blizzard nameplate frame; transient frame values
+ns.unitToPlate = setmetatable({}, { __mode = "v" })
+ns.unitToNameplate = setmetatable({}, { __mode = "v" })
 ns.unitToNameplateGUID = {} -- [unit] = GUID captured when the nameplate was added
 ns.GuildDisplayCache = {} -- [guildName] = "<GuildName>" (cached formatted strings)
-ns.deferredDisable = setmetatable({}, { __mode = "k" }) -- transient nameplate queue
+ns.deferredDisable = setmetatable({}, { __mode = "k" })
 
 local npcTitleTooltip
 local npcTitleQueue = {}        -- [npcID] = unit
@@ -626,6 +706,23 @@ end
 -- Note: Cached settings are stored in ns.c_* (set by Nameplates.lua:UpdateDBCache)
 -- Core.lua uses ns.c_font, ns.c_friendlyFontSize, ns.c_guildFontSize, ns.c_fontOutline, ns.c_raidMarkerSize
 
+local worldRehydrateGeneration = 0
+local function RehydrateWorldVisuals()
+    if ns.UpdateDBCache then ns:UpdateDBCache() end
+    if ns.UpdateAllPlates then ns:UpdateAllPlates() end
+    if ns.ValidateTargetPlate then ns.ValidateTargetPlate() end
+    if ns.UpdateNameplateAlphas then ns.UpdateNameplateAlphas("world") end
+    if ns.UpdateRunes then ns:UpdateRunes(true) end
+end
+
+local function ScheduleWorldRehydrate()
+    worldRehydrateGeneration = worldRehydrateGeneration + 1
+    local generation = worldRehydrateGeneration
+    C_Timer.After(0, function()
+        if generation == worldRehydrateGeneration then RehydrateWorldVisuals() end
+    end)
+end
+
 Core:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         ns:LoadVariables()  -- Also calls UpdateDBCache() at the end (sets ns.c_* cache)
@@ -635,7 +732,6 @@ Core:SetScript("OnEvent", function(self, event, ...)
         if C_CVar then
             C_CVar.Set("nameplateSmoothStacking", false)  -- Smooth Stacking Nameplates
             C_CVar.Set("highPrecisionNameplates", false)  -- High-Precision Nameplates
-            -- ShowClassColorInNameplate is forced OFF by WotlkCompat on stock 3.3.5a; TurboPlates applies class colors itself
             -- Note: DrawNameplateClickBox is user-controllable via options, not forced here
 
             -- Custom stacking requires nameplateAllowOverlap to be enabled
@@ -709,6 +805,8 @@ Core:SetScript("OnEvent", function(self, event, ...)
         local version = GetAddOnMetadata(addonName, "Version") or "1.0.0"
         local boostedBy = L.BoostedBy or "TurboPlates v%s loaded - /tp"
         print(boostedBy:format(version))
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        ScheduleWorldRehydrate()
     elseif event == "PLAYER_REGEN_ENABLED" then
         -- Combat ended - finish any deferred DisableBlizzPlate calls
         -- Now safe to call SetAttribute without causing taint
@@ -822,12 +920,19 @@ local function SetupLiteContainer(container, nameplate)
     highlightDriver:EnableMouse(false)
     highlightDriver:Hide()
     highlightDriver:SetScript("OnUpdate", function(self, elapsed)
+        if ns.c_mouseoverGlow == false then
+            ns.HideLiteNameHighlight(self.container)
+            return
+        end
         self.elapsed = (self.elapsed or 0) + elapsed
         local throttle = 0.1 * (ns.c_throttleMultiplier or 1)
         if self.elapsed <= throttle then return end
         self.elapsed = 0
 
-        if not (self.unit and UnitExists("mouseover") and UnitIsUnit("mouseover", self.unit)) then
+        local cameraLook = type(IsMouselooking) == "function" and IsMouselooking()
+        local native = self.nativeSource
+        local nativeHover = not cameraLook and native and native.IsShown and native:IsShown()
+        if cameraLook or (not nativeHover and not (self.unit and UnitExists("mouseover") and UnitIsUnit("mouseover", self.unit))) then
             ns.HideLiteNameHighlight(self.container)
         end
     end)
@@ -862,7 +967,7 @@ local function SetupLiteContainer(container, nameplate)
     PixelUtil.SetSize(liteHP, hpWidth, hpHeight, 1, 1)
     PixelUtil.SetPoint(liteHP, "TOP", txt, "BOTTOM", 0, -2, 1, 1)
     liteHP:SetStatusBarTexture(ns.c_texture or "Interface\\RaidFrame\\Raid-Bar-Hp-Fill")
-    liteHP:SetStatusBarColor(0, 1, 0)
+    liteHP:SetStatusBarColor(ns.c_friendlyNPCColor_r or 0.29, ns.c_friendlyNPCColor_g or 0.68, ns.c_friendlyNPCColor_b or 0.30)
     liteHP:Hide()
     container.liteHealthBar = liteHP
 
@@ -884,12 +989,16 @@ local function SetupLiteContainer(container, nameplate)
     container:SetFrameLevel(nameplate:GetFrameLevel() + 1)
 end
 
-function ns.ShowLiteNameHighlight(nameplate, unit)
+function ns.ShowLiteNameHighlight(nameplate, unit, nativeSource)
     local container = nameplate and nameplate.liteContainer
+    if ns.c_mouseoverGlow == false then
+        if container then ns.HideLiteNameHighlight(container) end
+        return
+    end
     local txt = container and container.liteNameText
     local highlight = container and container.liteNameHighlight
     local driver = container and container.liteNameHighlightDriver
-    if not (unit and container and txt and highlight and driver) then return end
+    if not (container and txt and highlight and driver) or (not unit and not nativeSource) then return end
 
     local width = txt:GetStringWidth() or 0
     if width <= 0 then
@@ -928,6 +1037,7 @@ function ns.ShowLiteNameHighlight(nameplate, unit)
     PixelUtil.SetPoint(highlight.top, "CENTER", txt, "CENTER", 0, cloudHeight * 0.08, 1, 1)
 
     driver.unit = unit
+    driver.nativeSource = nativeSource
     driver.elapsed = 0
     local textures = highlight.textures
     for i = 1, #textures do
@@ -948,6 +1058,7 @@ function ns.HideLiteNameHighlight(container)
     end
     if container.liteNameHighlightDriver then
         container.liteNameHighlightDriver.unit = nil
+        container.liteNameHighlightDriver.nativeSource = nil
         container.liteNameHighlightDriver:Hide()
     end
 end
@@ -1079,7 +1190,6 @@ local function OnNamePlateAdded(_, unit, nameplate)
         local displayName = ns.FormatName and ns:FormatName(name) or name
         txt:SetText(displayName)
 
-        -- Friendly name color. Class color is used only when explicitly enabled.
         if ns.c_classColoredName and isPlayer and cachedClass then
             local classColor = GetClassColor(cachedClass)
             if classColor then
@@ -1280,9 +1390,6 @@ local function OnNamePlateAdded(_, unit, nameplate)
         if ns.FullPlateUpdate then
             ns:FullPlateUpdate(nameplate.myPlate, unit)
         end
-        -- FullPlateUpdate/style code may reuse cached geometry from the previous
-        -- occupant. Make the current saved world X/Y offsets authoritative only
-        -- after normal setup has completed.
         ApplyCurrentWorldPlateOffset(nameplate.myPlate)
 
         -- Initial TurboDebuff update (don't wait for UNIT_AURA batch)
@@ -1360,6 +1467,13 @@ OnNamePlateRemoved = function(_, unit, nameplate)
         if ns.HideLiteTurboDebuff then
             ns:HideLiteTurboDebuff(nameplate)
         end
+        if nameplate.liteContainer then
+            nameplate.liteContainer.unit = nil
+            nameplate.liteContainer.cachedGUID = nil
+            nameplate.liteContainer.isPlayer = false
+            nameplate.liteContainer.isFriendly = nil
+        end
+        nameplate._isLite = false
         if nameplate.myPlate then
             nameplate.myPlate._auraColorOverride = nil
             -- Drop the pinned aura-identity GUID so a recycled frame's next occupant
@@ -1368,12 +1482,8 @@ OnNamePlateRemoved = function(_, unit, nameplate)
             nameplate.myPlate.pinnedGUID = nil
             nameplate.myPlate.pinnedName = nil
             nameplate.myPlate.pinnedLevel = nil
-            -- Clear stale plate reference before recycling (keep GUID - target still exists)
-            if nameplate.myPlate == ns.currentTargetPlate then
-                ns.currentTargetPlate = nil
-                -- Don't clear ns.currentTargetGUID - the target unit still exists,
-                -- just its plate went out of view. ValidateTargetPlate will reapply
-                -- effects when the plate comes back.
+            if ns.ReleaseTargetOwnership then
+                ns:ReleaseTargetOwnership(nameplate.myPlate)
             end
             -- Reset scale and glow to prevent leftover effects on recycled plates
             -- TAINT FIX: Defer to next frame to break secure callback chain
@@ -1440,7 +1550,6 @@ OnNamePlateRemoved = function(_, unit, nameplate)
                     nameplate.myPlate.cps[i]:Hide()
                 end
             end
-            -- Hide Death Knight runes and stop any square-style cooldown tickers.
             if ns.CleanupPlateRunes then
                 ns:CleanupPlateRunes(nameplate.myPlate)
             end
@@ -1473,7 +1582,16 @@ OnNamePlateRemoved = function(_, unit, nameplate)
                     end
                 end
             end
-            -- Clear initialized flag so plate gets re-initialized for next unit
+            nameplate.myPlate.unit = nil
+            nameplate.myPlate.cachedGUID = nil
+            nameplate.myPlate.isFriendly = nil
+            nameplate.myPlate.isPlayer = false
+            nameplate.myPlate.isNameOnly = false
+            if nameplate.myPlate.highlight then
+                nameplate.myPlate.highlight.unit = nil
+                nameplate.myPlate.highlight:Hide()
+            end
+
             nameplate.myPlate._initialized = false
             nameplate.myPlate._lastUnit = nil
             -- Reset nameInHealthbar cache so recycled plate re-applies positioning
@@ -1500,9 +1618,6 @@ end
 
 -- Note: Lite plate cache is now handled by Nameplates.lua:UpdateDBCache (ns.c_*)
 
--- Friendly name-only plates can belong to players, NPCs, pets or totems.
--- Keep their compact health bar on the same relationship/class colour policy as
--- full plates instead of the old health-percent green->red gradient.
 local function ApplyLiteHealthColor(liteHP, unit)
     if UnitIsPlayer(unit) then
         if ns.c_classColoredHealth then
@@ -1513,14 +1628,9 @@ local function ApplyLiteHealthColor(liteHP, unit)
                 return
             end
         end
-        local sr, sg, sb = ns.GetNameplateSourceColor and ns.GetNameplateSourceColor(unit)
-        if sr and sb and sb >= 0.85 and sr <= 0.20 then
-            liteHP:SetStatusBarColor(sr, sg or 0, sb) -- pass through native Blizzard blue
-        else
-            liteHP:SetStatusBarColor(0, 0, 1) -- stock 3.3.5 friendly-player blue
-        end
+        liteHP:SetStatusBarColor(ns.c_friendlyPlayerColor_r or 0.31, ns.c_friendlyPlayerColor_g or 0.45, ns.c_friendlyPlayerColor_b or 0.63)
     else
-        liteHP:SetStatusBarColor(0, 1, 0)
+        liteHP:SetStatusBarColor(ns.c_friendlyNPCColor_r or 0.29, ns.c_friendlyNPCColor_g or 0.68, ns.c_friendlyNPCColor_b or 0.30)
     end
 end
 

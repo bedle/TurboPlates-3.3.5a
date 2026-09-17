@@ -118,9 +118,6 @@ if type(CreateFramePool) ~= "function" then
         end
         if not obj then return nil, isNew end
         self.activeObjects[obj] = true
-        -- Blizzard pools return whether this object was newly created. Returning
-        -- true for recycled objects made LibCustomGlow rebuild ButtonGlow
-        -- textures/animation groups every time a glow frame was reused.
         return obj, isNew
     end
     local function Pool_Release(self, obj)
@@ -130,7 +127,6 @@ if type(CreateFramePool) ~= "function" then
         if self.resetterFunc then self.resetterFunc(self, obj) else obj:Hide() end
     end
     local function Pool_ReleaseAll(self)
-        -- Avoid mutating a table from inside a generic-for traversal.
         while true do
             local obj = next(self.activeObjects)
             if not obj then break end
@@ -267,12 +263,7 @@ do
 end
 
 ---------------------------------------------------------------------------
--- TurboPlates-private SetAtlas safety helper.
 --
--- Do NOT replace Texture:SetAtlas globally. This server backports newer UI
--- systems and we already proved that changing shared UI methods can corrupt
--- unrelated custom frames. TurboPlates has only a handful of atlas call sites,
--- so keep the 3.3.5 fallback local to this addon.
 ---------------------------------------------------------------------------
 do
     local probeTex = UIParent:CreateTexture()
@@ -466,27 +457,18 @@ if type(GetCreatureIDFromGUID) ~= "function" then
 end
 
 ---------------------------------------------------------------------------
--- TurboPlates-private safe spell tooltip helper.
 --
--- IMPORTANT: do NOT patch the GameTooltip metatable on this 3.3.5a client.
--- Custom/backported UI (notably CipherTalentPlayerChoice) may provide its own
--- spell hyperlink/tooltip behavior for server-defined spells. Overriding the
--- shared GameTooltip methods globally can strip those custom descriptions.
--- TurboPlates only needs a guarded helper for its own option-list spell hovers.
 ---------------------------------------------------------------------------
 function ns.SafeSetSpellTooltip(tooltip, spellId)
     if not tooltip or not spellId then return false end
     spellId = tonumber(spellId)
     if not spellId or not GetSpellInfo(spellId) then return false end
 
-    -- Preserve any client/server-provided SetSpellByID implementation.
     if type(tooltip.SetSpellByID) == "function" then
         local ok = pcall(tooltip.SetSpellByID, tooltip, spellId)
         if ok then return true end
     end
 
-    -- Stock 3.3.5 fallback. Only call SetHyperlink for a spell that the client
-    -- already resolves through GetSpellInfo, avoiding the historical #132 path.
     if type(tooltip.SetHyperlink) == "function" then
         local ok = pcall(tooltip.SetHyperlink, tooltip, "spell:" .. spellId)
         return ok and true or false

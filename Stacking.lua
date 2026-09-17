@@ -3,7 +3,7 @@
 local _, ns = ...
 
 local StackingFrame = CreateFrame("Frame")
-local StackingPlates = setmetatable({}, { __mode = "k" })  -- transient nameplate state
+local StackingPlates = setmetatable({}, { __mode = "k" })
 local SortedPlates = {}    -- indexed array for deterministic iteration
 local stackingEnabled = false
 local stackingLastUpdate = 0

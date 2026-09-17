@@ -55,10 +55,7 @@ end
 local function ValidateSettings(settings)
     if type(settings) ~= "table" then return false end
 
-    -- Custom player relationship colours are no longer supported; strip legacy keys
-    -- before an older profile is merged.
     settings.enemyPlayerColor = nil
-    settings.friendlyPlayerColor = nil
 
     -- List of nested table keys that must be tables
     local nestedTables = { "personal", "auras", "stacking", "turboDebuffs" }
@@ -79,7 +76,8 @@ local function ValidateSettings(settings)
 
     -- Color tables that must have r/g/b fields
     local colorKeys = {
-        "hpColor", "castColor", "noInterruptColor", "petColor",
+        "hpColor", "friendlyPlayerColor", "friendlyNPCColor", "neutralColor",
+        "castColor", "noInterruptColor", "petColor",
         "targetGlowColor", "tappedColor", "hostileNameColor", "friendlyNameColor",
         "secureColor", "transColor", "insecureColor", "offTankColor",
         "dpsSecureColor", "dpsTransColor", "dpsAggroColor",
@@ -253,9 +251,6 @@ function ns:ImportSettings(importString, options)
         return false, L.ImportDeserializeFailed
     end
 
-    -- Repair the envelope for EVERY import mode, not only the Settings category.
-    -- Highlight/whitelist-only imports still contain persistent tables that are
-    -- indexed immediately after import and therefore need the same type guards.
     if ns.RepairSettingsStructure and not ns:RepairSettingsStructure(settings, false) then
         return false, L.ImportValidationFailed
     end

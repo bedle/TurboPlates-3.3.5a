@@ -1921,7 +1921,7 @@ local function CreatePreview(parent)
     -- Castbar with initial size
     local cb = CreateFrame("StatusBar", nil, plate)
     cb:SetSize(defWidth - defCastHeight - 2, defCastHeight)
-    cb:SetPoint("TOPRIGHT", hp, "BOTTOMRIGHT", 0, -2)
+    cb:SetPoint("TOPRIGHT", hp, "BOTTOMRIGHT", 0, -2 + (d.castbarYOffset or 0))
     cb:SetStatusBarTexture(bdTex)
     cb:SetStatusBarColor(0.3, 0.6, 1)
     cb:SetMinMaxValues(0, 100)
@@ -2040,8 +2040,6 @@ local function CreatePreview(parent)
         return playerClass == "DRUID" or playerClass == "ROGUE" or playerClass == "HERO"
     end
 
-    -- Death Knight rune preview. Use Blizzard's 3.3.5 rune colors and display
-    -- order (Blood, Frost, Unholy) without querying live cooldown state.
     local runePreviewColors = {
         {1.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
         {0.0, 1.0, 1.0}, {0.0, 1.0, 1.0},
@@ -2052,11 +2050,14 @@ local function CreatePreview(parent)
     runeContainer:SetSize(100, 4)
     runeContainer:SetPoint("BOTTOM", hp, "TOP", 0, 7)
     for i = 1, 6 do
-        local rune = runeContainer:CreateTexture(nil, "ARTWORK")
+        local runeHolder = CreateFrame("Frame", nil, runeContainer)
+        local rune = runeHolder:CreateTexture(nil, "ARTWORK")
+        rune:SetAllPoints(runeHolder)
         rune:SetTexture(bdTex)
         local color = runePreviewColors[i]
         rune:SetVertexColor(color[1], color[2], color[3])
-        runePreview[i] = rune
+        runeHolder.rune = rune
+        runePreview[i] = runeHolder
     end
 
     local function ShouldShowRunes()
@@ -2492,7 +2493,7 @@ local function CreatePreview(parent)
             cb:SetWidth(castW)
             cb:ClearAllPoints()
             if showIcon then
-                cb:SetPoint("TOPRIGHT", hp, "BOTTOMRIGHT", 0, -2)
+                cb:SetPoint("TOPRIGHT", hp, "BOTTOMRIGHT", 0, -2 + (db.castbarYOffset or d.castbarYOffset or 0))
                 cbIcon:SetSize(iconSize, iconSize)
                 cbIcon:ClearAllPoints()
                 cbIcon:SetPoint("RIGHT", cb, "LEFT", -2, 0)
@@ -2502,7 +2503,7 @@ local function CreatePreview(parent)
                 cbIconBorder:SetAllPoints(cbIcon)
                 cbIconBorder:Show()
             else
-                cb:SetPoint("TOP", hp, "BOTTOM", 0, -2)
+                cb:SetPoint("TOP", hp, "BOTTOM", 0, -2 + (db.castbarYOffset or d.castbarYOffset or 0))
                 cbIcon:Hide()
                 cbIconBorder:Hide()
             end
@@ -2555,9 +2556,6 @@ local function CreatePreview(parent)
             cpContainer:Hide()
         end
 
-        -- Death Knight runes preview (target-nameplate placement). The Personal Bar
-        -- offsets are exercised in-game, while this preview mirrors the existing
-        -- Combo Points preview convention.
         if ShouldShowRunes() and db.showRunes == true then
             local runeSize = db.runeSize or d.runeSize or 12
             local runeStyle = db.runeStyle or d.runeStyle or 1
@@ -2573,14 +2571,15 @@ local function CreatePreview(parent)
             runeContainer:Show()
 
             for i = 1, 6 do
-                local rune = runePreview[i]
-                rune:ClearAllPoints()
-                rune:SetSize(runeSize, runeHeight)
+                local runeHolder = runePreview[i]
+                local rune = runeHolder.rune
+                runeHolder:ClearAllPoints()
+                runeHolder:SetSize(runeSize, runeHeight)
+                runeHolder:SetPoint("LEFT", runeContainer, "LEFT", (i - 1) * (runeSize + runeSpacing), 0)
                 rune:SetTexture(runeStyle == 2 and (mediaPath .. "Circle_AlphaGradient_Out") or bdTex)
-                rune:SetPoint("LEFT", runeContainer, "LEFT", (i - 1) * (runeSize + runeSpacing), 0)
                 local color = runePreviewColors[i]
                 rune:SetVertexColor(color[1], color[2], color[3])
-                rune:Show()
+                runeHolder:Show()
             end
         else
             runeContainer:Hide()
@@ -3154,8 +3153,6 @@ function ns:ToggleGUI()
 
     -- Additional settings
     local friendlyNameOnlyCB = CreateCheckBox(p1, "friendlyNameOnly", L.FriendlyNameOnly, 20, y - 175, function()
-        -- Name-Only/full are alternate visuals of the same world plate.  Re-apply the
-        -- one global distance-scaling state to both representations immediately.
         if ns.RefreshAllDistanceScales then ns.RefreshAllDistanceScales() end
     end)
     friendlyNameOnlyCB:SetScript("OnEnter", function(self)
@@ -3203,11 +3200,9 @@ function ns:ToggleGUI()
     friendlyNameOnlyCB:HookScript("OnClick", UpdateNameOnlyDependents)
     friendlyNameOnlyCB:HookScript("OnShow", UpdateNameOnlyDependents)
 
-    -- Tank Mode dropdown
     local tankOpts = {{name = L.TankModeDisabled, value = 0}, {name = L.TankModeSmart, value = 1}, {name = L.TankModeEnabled, value = 2}}
     CreateDropdown(p1, "tankMode", L.TankMode, tankOpts, 20, y - 265)
 
-    -- Execute Range slider (below Tank Mode)
     CreateSlider(p1, "executeRange", L.ExecuteRange, 0, 100, 20, y - 320, false, nil, "%")
 
     -- PvP section header
@@ -3217,14 +3212,8 @@ function ns:ToggleGUI()
     local classColoredHealthCB = CreateCheckBox(p1, "classColoredHealth", L.ClassColoredHealth, 260, y - 175)
     local classColoredNameCB = CreateCheckBox(p1, "classColoredName", L.ClassColoredName, 260, y - 205)
 
-    -- HERO detection must happen NOW, not when OptionsGUI.lua is loaded. Several
-    -- stock/private 3.3.5 cores return nil/legacy class data during addon load and
-    -- only expose "Hero"/"HERO" after login/world entry.
     local unavailableTip = L.ClasslessServerUnavailable or "not available for Classless servers"
 
-    -- A disabled CheckButton cannot reliably receive OnEnter on every 3.3.5
-    -- client. Use a transparent mouse-enabled overlay for the tooltip. It also
-    -- swallows clicks, making the two controls physically unusable while locked.
     local function CreateDisabledTooltipOverlay(chk, title)
         local blocker = CreateFrame("Frame", nil, p1)
         blocker:SetFrameLevel(chk:GetFrameLevel() + 20)
@@ -3264,8 +3253,6 @@ function ns:ToggleGUI()
             classColoredHealthBlocker:Show()
             classColoredNameBlocker:Show()
 
-            -- Keep the runtime cache in sync immediately if an old profile or
-            -- script had either option enabled.
             if changed and ns.UpdateDBCache then ns:UpdateDBCache() end
         else
             classColoredHealthBlocker:Hide()
@@ -3281,10 +3268,6 @@ function ns:ToggleGUI()
         end
     end
 
-    -- Refresh whenever the General page or either checkbox appears. HookScript
-    -- runs after CreateCheckBox's own OnShow handler, so a stale SavedVariables
-    -- value cannot redraw the checkmark after we lock it. The OnClick hooks are a
-    -- final guard if another addon/script programmatically invokes the control.
     p1:HookScript("OnShow", ApplyHeroClassColorLock)
     classColoredHealthCB:HookScript("OnShow", ApplyHeroClassColorLock)
     classColoredNameCB:HookScript("OnShow", ApplyHeroClassColorLock)
@@ -3341,11 +3324,7 @@ function ns:ToggleGUI()
     CreateSlider(p2, "raidMarkerY", L.RaidMarkerY, -50, 50, 20, y - 310, false, nil, "px")
     CreateSlider(p2, "raidMarkerX", L.RaidMarkerX, -50, 50, 260, y - 310, false, nil, "px")
 
-    -- Row 8: Optional perspective-style distance scaling. Close plates keep their
-    -- configured size; distant world plates progressively shrink.
     CreateCheckBox(p2, "distanceScaling", L.DistanceScaling or "Scale With Distance", 20, y - 360, function()
-        -- distanceScaling is global, not mode-specific.  Synchronize both the full
-        -- myPlate and Friendly Name-Only liteContainer, including whichever is hidden.
         if ns.RefreshAllDistanceScales then ns.RefreshAllDistanceScales() end
     end)
 
@@ -3366,7 +3345,7 @@ function ns:ToggleGUI()
     distanceYCB:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(L.DistanceYOffset or "Auto Distance Y Offset", 1, 1, 1)
-        GameTooltip:AddLine(L.DistanceYOffsetTip or "Gradually adjusts distant nameplates vertically to keep them easier to see. Nearby nameplates keep their normal position. Use the slider below to fine-tune the effect.", nil, nil, nil, true)
+        GameTooltip:AddLine(L.DistanceYOffsetTip or "Moves distant nameplates up or down automatically. Nearby nameplates stay in place.", nil, nil, nil, true)
         GameTooltip:Show()
     end)
     distanceYCB:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -3380,7 +3359,7 @@ function ns:ToggleGUI()
     local function ShowDistanceYMaxTooltip(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(L.DistanceYOffsetMax or "Distance Y Offset", 1, 1, 1)
-        GameTooltip:AddLine(L.DistanceYOffsetMaxTip or "Adjusts how much distant nameplates move vertically. Positive values move them higher; negative values move them lower.", nil, nil, nil, true)
+        GameTooltip:AddLine(L.DistanceYOffsetMaxTip or "Sets how far distant nameplates move. Positive moves up; negative moves down.", nil, nil, nil, true)
         GameTooltip:Show()
     end
     distanceYMaxSlider:EnableMouse(true)
@@ -3402,7 +3381,9 @@ function ns:ToggleGUI()
 
     -- Row 2: Font size slider and name display format
     CreateSlider(p3, "fontSize", L.FontSize, 8, 24, 20, y - 50, false, nil, "pt")
-    CreateDropdown(p3, "nameDisplayFormat", L.NameDisplayFormat, ns.NameFormats, 260, y - 50)
+    CreateDropdown(p3, "nameDisplayFormat", L.NameDisplayFormat, ns.NameFormats, 260, y - 50, function()
+        if ns.RefreshNameDisplay then ns:RefreshNameDisplay() end
+    end)
 
     -- Row 3: Friendly & Guild font sizes
     CreateSlider(p3, "friendlyFontSize", L.FriendlyFontSize, 8, 24, 20, y - 105, false, nil, "pt")
@@ -3448,11 +3429,14 @@ function ns:ToggleGUI()
 
     -- Base healthbar colors section
     CreateFS(p4, 12, L.BaseColors, "system", "TOPLEFT", 20, y)
-    CreateColorSwatch(p4, "hpColor", L.HpColor, 20, y - 25)
-    CreateColorSwatch(p4, "friendlyNameColor", L.FriendlyNameColor, 150, y - 25)
-    CreateColorSwatch(p4, "hostileNameColor", L.EnemyNameColor, 280, y - 25)
-    CreateColorSwatch(p4, "petColor", L.PetColor, 410, y - 25)
-    CreateColorSwatch(p4, "tappedColor", L.TappedColor, 20, y - 60)
+    CreateColorSwatch(p4, "friendlyPlayerColor", L.FriendlyPlayerHealthColor or "Friendly Player", 20, y - 25)
+    CreateColorSwatch(p4, "friendlyNPCColor", L.FriendlyNPCHealthColor or "Friendly NPC", 150, y - 25)
+    CreateColorSwatch(p4, "hpColor", L.HpColor or "Enemy", 280, y - 25)
+    CreateColorSwatch(p4, "neutralColor", L.NeutralHealthColor or "Neutral", 410, y - 25)
+    CreateColorSwatch(p4, "petColor", L.PetColor, 20, y - 60)
+    CreateColorSwatch(p4, "tappedColor", L.TappedColor, 150, y - 60)
+    CreateColorSwatch(p4, "friendlyNameColor", L.FriendlyNameColor, 280, y - 60)
+    CreateColorSwatch(p4, "hostileNameColor", L.EnemyNameColor, 410, y - 60)
 
     -- Castbar colors section
     CreateFS(p4, 12, L.CastbarColors, "system", "TOPLEFT", 20, y - 105)
@@ -3460,14 +3444,12 @@ function ns:ToggleGUI()
     CreateColorSwatch(p4, "noInterruptColor", L.NoInterruptColor, 150, y - 130)
     CreateColorSwatch(p4, "highlightGlowColor", L.HighlightGlowColor, 280, y - 130)
 
-    -- Tank colors section
     CreateFS(p4, 12, L.TankColors, "system", "TOPLEFT", 20, y - 175)
     CreateColorSwatch(p4, "secureColor", L.SecureColor, 20, y - 200)
     CreateColorSwatch(p4, "transColor", L.TransColor, 150, y - 200)
     CreateColorSwatch(p4, "insecureColor", L.InsecureColor, 280, y - 200)
     CreateColorSwatch(p4, "offTankColor", L.OffTankColor, 410, y - 200)
 
-    -- DPS colors section
     CreateFS(p4, 12, L.DpsColors, "system", "TOPLEFT", 20, y - 245)
     CreateColorSwatch(p4, "dpsSecureColor", L.DpsSecureColor, 20, y - 270)
     CreateColorSwatch(p4, "dpsTransColor", L.DpsTransColor, 150, y - 270)
@@ -3590,9 +3572,10 @@ function ns:ToggleGUI()
     CreateCheckBox(p5, "showCastSpark", L.ShowCastSpark, 20, y - 60)
     CreateCheckBox(p5, "showCastTimer", L.ShowCastTimer, 20, y - 90)
     CreateSlider(p5, "castHeight", L.CastHeight, 5, 50, 20, y - 120, false, nil, "px")
+    CreateSlider(p5, "castbarYOffset", L.CastbarYOffset or "Castbar Offset Y", -100, 100, 20, y - 165, false, nil, "px")
 
     -- Highlight Glow checkbox with tooltip
-    local hlGlowCB = CreateCheckBox(p5, "highlightGlowEnabled", L.EnableHighlightGlow, 20, y - 180)
+    local hlGlowCB = CreateCheckBox(p5, "highlightGlowEnabled", L.EnableHighlightGlow, 20, y - 225)
     hlGlowCB:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(L.EnableHighlightGlow, 1, 1, 1)
@@ -3602,10 +3585,10 @@ function ns:ToggleGUI()
     hlGlowCB:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- Highlight Glow sliders
-    CreateSlider(p5, "highlightGlowLines", L.HighlightGlowLines, 1, 16, 20, y - 210, false, nil, "")
-    CreateSlider(p5, "highlightGlowFrequency", L.HighlightGlowFrequency, -2, 2, 20, y - 255, true, nil, "")
-    CreateSlider(p5, "highlightGlowLength", L.HighlightGlowLength, 1, 30, 20, y - 300, false, nil, "px")
-    CreateSlider(p5, "highlightGlowThickness", L.HighlightGlowThickness, 1, 10, 20, y - 345, false, nil, "px")
+    CreateSlider(p5, "highlightGlowLines", L.HighlightGlowLines, 1, 16, 20, y - 255, false, nil, "")
+    CreateSlider(p5, "highlightGlowFrequency", L.HighlightGlowFrequency, -2, 2, 20, y - 300, true, nil, "")
+    CreateSlider(p5, "highlightGlowLength", L.HighlightGlowLength, 1, 30, 20, y - 345, false, nil, "px")
+    CreateSlider(p5, "highlightGlowThickness", L.HighlightGlowThickness, 1, 10, 20, y - 390, false, nil, "px")
 
     -- Right column: Highlighted Spells List
     local hlHeader = CreateFS(p5, 13, L.HighlightSpells, "system", "TOPLEFT", 260, y)
@@ -4876,7 +4859,6 @@ function ns:ToggleGUI()
     CreatePersonalSlider(p8, "debuffYOffset", L.PersonalBarDebuffYOffset or "Debuffs Y Position", -200, 200, 260, y, "px")
 
     -- ==========================================================================
-    -- TAB 9: Resources (Combo Points + Death Knight Runes)
     -- ==========================================================================
     local p9 = guiPage[9]
     y = -8
@@ -4885,9 +4867,6 @@ function ns:ToggleGUI()
     cpHeader:SetTextColor(1, 0.8, 0)
 
     local cpEnableCB = CreateCheckBox(p9, "showComboPoints", L.ShowComboPoints, 20, y - 22, function()
-        -- CreateCheckBox has already refreshed once before this callback. Clean up
-        -- stale pips, then refresh again so target-mode Combo Points are restored
-        -- immediately.
         if ns.CleanupPersonalComboPoints then ns:CleanupPersonalComboPoints() end
         if ns.CleanupTargetComboPoints then ns:CleanupTargetComboPoints() end
         UpdateAll()
@@ -6312,7 +6291,7 @@ function ns:ToggleGUI()
     local p13 = guiPage[13]
     y = -10
 
-    -- Row 1: Totem Display (left) & Performance header + Potato PC Mode (right)
+                                                           
     local totemOpts = {
         {name = L.TotemDisabled, value = "disabled"},
         {name = L.TotemHPName, value = "hp_name"},
@@ -6322,28 +6301,8 @@ function ns:ToggleGUI()
         {name = L.TotemIconNameHP, value = "icon_name_hp"},
     }
     CreateDropdown(p13, "totemDisplay", L.TotemDisplay, totemOpts, 20, y)
-
-    -- Performance header (right side)
-    local perfHeader = p13:CreateFontString(nil, "OVERLAY")
-    SetGUIFont(perfHeader, 12, "")
-    perfHeader:SetPoint("TOPLEFT", 260, y)
-    perfHeader:SetText(L.PerformanceHeader or "Performance:")
-    perfHeader:SetTextColor(1, 0.8, 0)
-
-    -- Potato PC Mode checkbox (below Performance header)
-    local potatoCheck = CreateCheckBox(p13, "potatoMode", L.PotatoPCMode, 260, y - 18)
-    potatoCheck:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(L.PotatoPCMode, 1, 0.8, 0)
-        GameTooltip:AddLine(L.PotatoPCModeDesc, 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    potatoCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    potatoCheck:SetScript("OnClick", function(self)
-        TurboPlatesDB.potatoMode = self:GetChecked()
-        if ns.UpdateDBCache then ns:UpdateDBCache() end
-        -- Show reload prompt since aura batching interval is set at load time
-        StaticPopup_Show("TURBOPLATES_RELOAD_UI")
+    CreateCheckBox(p13, "mouseoverGlow", L.MouseoverGlow or "Mouseover Glow", 260, y - 18, function()
+        if ns.RefreshNativeMouseoverPresentation then ns:RefreshNativeMouseoverPresentation() end
     end)
 
     -- Row 2: Target Glow (left) & Target Arrow (right)
@@ -6373,6 +6332,26 @@ function ns:ToggleGUI()
     y = y - 35
     CreateCVarSlider(p13, "nameplateWidth", L.ClickableWidth, 40, 200, 20, y, nil, "px")
     CreateCVarSlider(p13, "nameplateHeight", L.ClickableHeight, 18, 60, 260, y, nil, "px")
+
+    local perfHeader = p13:CreateFontString(nil, "OVERLAY")
+    SetGUIFont(perfHeader, 12, "")
+    perfHeader:SetPoint("TOPLEFT", 260, y - 48)
+    perfHeader:SetText(L.PerformanceHeader or "Performance:")
+    perfHeader:SetTextColor(1, 0.8, 0)
+
+    local potatoCheck = CreateCheckBox(p13, "potatoMode", L.PotatoPCMode, 260, y - 66)
+    potatoCheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(L.PotatoPCMode, 1, 0.8, 0)
+        GameTooltip:AddLine(L.PotatoPCModeDesc, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    potatoCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    potatoCheck:SetScript("OnClick", function(self)
+        TurboPlatesDB.potatoMode = self:GetChecked()
+        if ns.UpdateDBCache then ns:UpdateDBCache() end
+        StaticPopup_Show("TURBOPLATES_RELOAD_UI")
+    end)
 
     -- TAB 14: Profiles (Import/Export)
     local p14 = guiPage[14]

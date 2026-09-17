@@ -633,3 +633,42 @@ Nameplates will scale with distance.
 This toggle uses newly introduced camera distance behavior, it will calculate distance between Player model and Target model 
 and automatically move nameplate up based on the distance.
 Implemented slider for additional Y Offset. 
+
+## [1.4.5] — 2026-09-17
+
+## Debuff/Buff fix
+Enemy plates scan the complete HARMFUL list rather than trusting HARMFUL|PLAYER.
+Explicit player, pet, vehicle, player/pet GUID, or trustworthy castByPlayer ownership is accepted directly.
+When a core returns unitCaster=nil, the raw UnitAura entry is not displayed as ours.
+
+## Backend rework for unit identification and classification 
+Completely reworked backend system of identifying and classifying units.
+A lot of this was moved to WotlkCompat.lua which is now doing heavy lifting.
+
+## Tank Mode rework
+General > Tank Mode:
+Reworked Tank mode and renamed to Aggro Mode to be more in line with the function:
+- Disabled - means fully disabled.
+- Automatic - it will automatically classify player based on this LFG aura and queue pick.
+- Always On - it will automatically use Tank Mode
+
+## Added Color Picker 
+Colors > Added Color picker for Friendly Player, Friendly NPC, Neutral NPC
+- Allows changing nameplate Color for Friendly Player - default (79, 115, 161)
+- Allows changing nameplate Color for Friendly NPC - default (74, 173, 77)
+- Allows changing nameplate Color for Neutral NPC - default (217, 196, 92)
+
+## Added Castbar Offset Y slider
+Castbar > Added Castbar Offset Y slider
+- Allows moving sliders on Y axis (upwards, downwards)
+
+## Added Mouseover Glow toggle
+Misc Options > Mouseover Glow toggle
+This bugged the hell out of me so i added a toggle to turn it off.. because why not?
+
+## Rework of Death Knight runes
+Complete backend rework of Death Knight runes to be completely stable on nameplates
+
+## Reworked Nameplate stacking
+Fixed the issue where multiple nameplates would overlap over each other and create visual mess.
+This is now handed over to Blizzard default stacking and nameplate promoting, TurboPlates just draws nameplates how blizzard says
