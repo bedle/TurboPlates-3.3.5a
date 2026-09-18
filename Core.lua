@@ -313,32 +313,37 @@ local ZORDER_BASE = 100
 local ZORDER_STRIDE = 32
 local zorderPlates = {}
 
-local function CaptureChildZOffsets(frame, rootLevel)
+local function CaptureChildZOffsets(frame, rootLevel, parentOffset)
+    local parentLevel = frame:GetFrameLevel()
+    parentOffset = parentOffset or 0
     local children = { frame:GetChildren() }
     for i = 1, #children do
         local child = children[i]
         if child and child.GetFrameLevel and child.SetFrameLevel then
             if child._tpZOffset == nil then
-                child._tpZOffset = child:GetFrameLevel() - rootLevel
+                child._tpZOffset = parentOffset + (child:GetFrameLevel() - parentLevel)
             end
-            CaptureChildZOffsets(child, rootLevel)
+            CaptureChildZOffsets(child, rootLevel, child._tpZOffset)
         end
     end
 end
 
-local function ApplyChildZOffsets(frame, rootLevel)
+local function ApplyChildZOffsets(frame, rootLevel, parentOffset)
+    local parentLevel = frame:GetFrameLevel()
+    parentOffset = parentOffset or 0
     local children = { frame:GetChildren() }
     for i = 1, #children do
         local child = children[i]
         if child and child.GetFrameLevel and child.SetFrameLevel then
             if child._tpZOffset == nil then
-                child._tpZOffset = child:GetFrameLevel() - rootLevel
+                child._tpZOffset = parentOffset + (child:GetFrameLevel() - parentLevel)
             end
             local level = rootLevel + child._tpZOffset
+            if level < 0 then level = 0 end
             if child:GetFrameLevel() ~= level then
                 child:SetFrameLevel(level)
             end
-            ApplyChildZOffsets(child, rootLevel)
+            ApplyChildZOffsets(child, rootLevel, child._tpZOffset)
         end
     end
 end
